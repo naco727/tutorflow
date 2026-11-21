@@ -15,3 +15,6 @@ window.TUTORFLOW_FIREBASE_CONFIG = {
 window.TUTORFLOW_AUTHORIZED_TEACHER_UIDS = [
   'a8HEV8D9IkdAVxu2z3KssWCk0oc2'
 ];
+
+// LINE Developers → LIFF App 的 LIFF ID；此設定不需要登入或個人資料權限。
+window.TUTORFLOW_LIFF_ID = '2012741223-NOSRPMAp';
