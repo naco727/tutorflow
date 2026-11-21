@@ -18,6 +18,8 @@ window.TUTORFLOW_AUTHORIZED_TEACHER_UIDS = [
 
 UID 取得方式：Firebase Console → Authentication → Users，找到老師的手機帳號，複製 UID。授權依 UID 判斷，不依電話號碼判斷。
 
+首次設定流程：先用 Firebase Console 的測試手機號碼完成一次登入；Firebase 會在驗證成功後建立使用者並產生 UID。TutorFlow 會拒絕尚未授權的帳號並返回登入頁，同時顯示 UID。把該 UID 加入 `firebase-config.js` 的陣列，以及下面 Firestore Rules 的 `REPLACE_WITH_TEACHER_UID`，重新整理後即可進入管理介面。不能把「第一個登入者」自動視為老師，否則任何人都可能取得管理權限。
+
 ## 2. Firebase Console 手動設定
 
 1. Authentication → Sign-in method：啟用 Phone。
