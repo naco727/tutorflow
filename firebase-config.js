@@ -2,9 +2,9 @@
 // 老師 UID 請填入 Firebase Authentication 使用者的 UID，不要填電話號碼。
 window.TUTORFLOW_FIREBASE_CONFIG = {
   apiKey: 'AIzaSyDE4IWus705zHS6QHb9RmMOiQnZYGj2Y14',
-  authDomain: 'turtorflow.firebaseapp.com',
-  projectId: 'turtorflow',
-  storageBucket: 'turtorflow.firebasestorage.app',
+  authDomain: 'tutorflow.firebaseapp.com',
+  projectId: 'tutorflow',
+  storageBucket: 'tutorflow.firebasestorage.app',
   messagingSenderId: '587503632857',
   appId: '1:587503632857:web:baa88d16c9012717da19c8',
   measurementId: 'G-Z7E6HQ1YPL'
