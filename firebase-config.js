@@ -12,4 +12,6 @@ window.TUTORFLOW_FIREBASE_CONFIG = {
 
 // 請在 Firebase Console → Authentication → Users 複製老師 UID 後填入。
 // 未填入前，所有管理者登入都會被拒絕，公開空堂頁面仍可使用。
-window.TUTORFLOW_AUTHORIZED_TEACHER_UIDS = [];
+window.TUTORFLOW_AUTHORIZED_TEACHER_UIDS = [
+  'a8HEV8D9IkdAVxu2z3KssWCk0oc2'
+];

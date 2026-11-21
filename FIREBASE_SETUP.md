@@ -18,14 +18,14 @@ window.TUTORFLOW_AUTHORIZED_TEACHER_UIDS = [
 
 UID 取得方式：Firebase Console → Authentication → Users，找到老師的手機帳號，複製 UID。授權依 UID 判斷，不依電話號碼判斷。
 
-首次設定流程：先用 Firebase Console 的測試手機號碼完成一次登入；Firebase 會在驗證成功後建立使用者並產生 UID。TutorFlow 會拒絕尚未授權的帳號並返回登入頁，同時顯示 UID。把該 UID 加入 `firebase-config.js` 的陣列，以及下面 Firestore Rules 的 `REPLACE_WITH_TEACHER_UID`，重新整理後即可進入管理介面。不能把「第一個登入者」自動視為老師，否則任何人都可能取得管理權限。
+首次設定流程：先用 Firebase Console 的測試手機號碼完成一次登入；Firebase 會在驗證成功後建立使用者並產生 UID。TutorFlow 會拒絕尚未授權的帳號並返回登入頁，同時顯示 UID。請確認這組 UID 同時存在於 `firebase-config.js` 與下面的 Firestore Rules，重新整理後即可進入管理介面。不能把「第一個登入者」自動視為老師，否則任何人都可能取得管理權限。
 
 ## 2. Firebase Console 手動設定
 
 1. Authentication → Sign-in method：啟用 Phone。
 2. Authentication → Settings → Authorized domains：加入 `naco727.github.io`；本機測試時視需要加入 `localhost`。
 3. Authentication → Sign-in method → Phone numbers for testing：只在測試環境設定測試手機與固定驗證碼。程式不會硬編碼測試號碼或驗證碼。
-4. Firestore Database → Rules：貼上下面完整規則，並把 `REPLACE_WITH_TEACHER_UID` 替換成實際老師 UID。
+4. Firestore Database → Rules：貼上下面完整規則，確認其中的老師 UID 與 `firebase-config.js` 相同。
 
 ## 3. Firestore Security Rules
 
@@ -36,7 +36,7 @@ service cloud.firestore {
   match /databases/{database}/documents {
     function isAuthorizedTeacher() {
       return request.auth != null
-        && request.auth.uid in ['REPLACE_WITH_TEACHER_UID'];
+        && request.auth.uid in ['a8HEV8D9IkdAVxu2z3KssWCk0oc2'];
     }
 
     function isValidPublicSlot() {
