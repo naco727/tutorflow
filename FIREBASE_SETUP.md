@@ -2,25 +2,17 @@
 
 本分支保留 TutorFlow 原本的 `localStorage` JSON 作為主要資料來源，Firebase 只負責老師登入，以及公開空堂的 `publicAvailability` 集合。學生、聯絡方式、課程紀錄、費率與付款資料不會上傳 Firestore。
 
-## 1. 在 `index.html` 設定 Web config 與老師 UID
+## 1. 在 `firebase-config.js` 設定 Web config 與老師 UID
 
-在 Firebase Console 的 Project settings → Your apps → Web app 取得 Firebase Web config，並在 `index.html` 的 Firebase 設定註解之後、`const FIREBASE_CONFIG` 之前加入：
+Firebase Web config 已放在 `firebase-config.js`。Firebase Console 的 Project settings → Your apps → Web app 可取得對應設定；請把老師 UID 填入白名單：
 
 ```html
-<script>
-  window.TUTORFLOW_FIREBASE_CONFIG = {
-    apiKey: 'Firebase Web config 的 apiKey',
-    authDomain: '你的專案.firebaseapp.com',
-    projectId: '你的專案 projectId',
-    appId: 'Firebase Web config 的 appId'
-  };
-  window.TUTORFLOW_AUTHORIZED_TEACHER_UIDS = [
-    'Firebase Authentication 使用者的 UID'
-  ];
-</script>
+window.TUTORFLOW_AUTHORIZED_TEACHER_UIDS = [
+  'Firebase Authentication 使用者的 UID'
+];
 ```
 
-若維持目前的單一 HTML 結構，也可以直接把這兩個 `window` 設定放在同一個 `<script>` 的常數宣告前。Web config 與 UID 不是 Admin 私密金鑰；不要放入 service account、Admin SDK private key 或任何私密憑證。
+`index.html` 會在主程式前載入 `firebase-config.js`。Web config 與 UID 不是 Admin 私密金鑰；不要放入 service account、Admin SDK private key 或任何私密憑證。
 
 UID 取得方式：Firebase Console → Authentication → Users，找到老師的手機帳號，複製 UID。授權依 UID 判斷，不依電話號碼判斷。
 
@@ -86,7 +78,7 @@ service cloud.firestore {
 
 ```bash
 git switch feature/firebase-phone-auth
-git add index.html tutorflow-icon.jpg FIREBASE_SETUP.md
+git add index.html firebase-config.js tutorflow-icon.jpg FIREBASE_SETUP.md
 git commit -m "加入 Firebase 手機驗證登入"
 git push -u origin feature/firebase-phone-auth
 ```

@@ -130,6 +130,7 @@
   <nav class="mobile-nav" id="mobileNav"><button class="active" data-view="dashboard"><span>⌂</span>首頁</button><button data-view="students"><span>♧</span>學生</button><button data-view="courses"><span>▣</span>課程</button><button data-view="finance"><span>◒</span>收入</button><button data-view="settings"><span>☰</span>更多</button></nav>
 
   <div class="modal-backdrop" id="modalBackdrop"><div class="modal" id="modal"></div></div><div class="toast" id="toast"></div>
+  <script src="./firebase-config.js"></script>
   <script>
     const KEY='tutorflow-data-v1',PUBLIC_AVAILABILITY_KEY='tutorflow-public-availability-v1';
     document.addEventListener('gesturestart',e=>e.preventDefault(),{passive:false});
@@ -162,9 +163,9 @@
     function ensureAdminData(){if(!data){data=loadData();normalizeLegacyStatuses()}return data}
     const availabilityDayNames=['日','一','二','三','四','五','六'];
     /*
-      部署前請在這段之前填入 Firebase Web 設定與老師 UID，例如：
-      window.TUTORFLOW_FIREBASE_CONFIG={apiKey:'...',authDomain:'naco727.firebaseapp.com',projectId:'...',appId:'...'};
-      window.TUTORFLOW_AUTHORIZED_TEACHER_UIDS=['Firebase Auth 的 UID'];
+      firebase-config.js 會在本主程式之前載入並提供以下兩個全域設定：
+      window.TUTORFLOW_FIREBASE_CONFIG
+      window.TUTORFLOW_AUTHORIZED_TEACHER_UIDS
       Web config 與 UID 可公開；絕對不要放入 Firebase Admin 私密金鑰。
     */
     const FIREBASE_CONFIG=window.TUTORFLOW_FIREBASE_CONFIG||null;
