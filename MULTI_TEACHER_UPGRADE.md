@@ -36,7 +36,7 @@
 
 1. 在專案根目錄執行 `npm ci`、`npm run build`、`npm test`、`npm run test:rules` 及 `npm run test:auth`。使用 Node.js 22 以上與 Java 21。
 2. UI 驗收可啟動 `npm run emulators`，另開終端執行 `python -m http.server 8765 --bind 127.0.0.1`。開啟 `http://127.0.0.1:8765/`。本機迴路來源使用 `demo-tutorflow`。
-3. 用模擬器建立兩個測試帳號。使用 Auth Emulator 顯示的驗證碼或郵件驗證連結，接著在 Emulator UI 以兩個 UID 建立對應的 active 會員文件。確認另一位老師看不到第一位老師的學生、收款、預約與空堂。開兩個獨立瀏覽器設定檔用同一 UID 測試同步及衝突。
+3. 用模擬器建立兩個測試帳號。使用 Auth Emulator 顯示的手機驗證碼或電子郵件登入連結，接著在 Emulator UI 以兩個 UID 建立對應的 active 會員文件。確認另一位老師看不到第一位老師的學生、收款與預約。開兩個獨立瀏覽器設定檔用同一 UID 測試同步及衝突。
 
 官方文件可查閱 [Firebase Auth 模擬器](https://firebase.google.com/docs/emulator-suite/connect_auth)、[Security Rules 模擬測試](https://firebase.google.com/docs/firestore/security/test-rules-emulator) 與 [Firestore 交易](https://firebase.google.com/docs/firestore/manage-data/transactions)。
 
@@ -46,12 +46,18 @@
 
 1. 舊版在每個有真實資料的瀏覽器先使用「匯出 JSON」。確認檔案可讀，留存學生、課程、教學紀錄、已收款堂數及空堂設定的基準。確認資料所在的瀏覽器來源與正式網址。
 2. 由有權限的 Firebase 擁有人以 Cloud Firestore 匯出保存正式資料，涵蓋 `publicAvailability` 及 Worker 依賴的集合。保留文件 ID、欄位型別與原作業規則，先在隔離的環境核對還原流程。保存正式部署的 Git SHA、現行 Firebase Auth Provider 設定和 LINE 設定。Firestore 管理匯出存取權及計費參見 [匯出與匯入資料](https://firebase.google.com/docs/firestore/manage-data/export-import)。
-3. 在 Firebase Console 的 Authentication 啟用 Phone 與 Email/Password，確認 GitHub Pages 的授權網域及 Firebase 預設密碼重設頁。Email 帳號須完成郵件驗證後才能進工作區。正式 SMS 需連結 Cloud Billing 並核對 Blaze、SMS 地區政策、實收簡訊及防濫用設定。測試手機號碼應使用模擬器或測試專案。若 Firestore 強制 App Check，須在測試用網域驗證網頁及既有 Worker 的存取方式後才能上線。參見 [Firebase Phone Authentication](https://firebase.google.com/docs/auth/web/phone-auth) 與 [SMS 計費說明](https://firebase.google.com/docs/auth/faq-and-troubleshooting)。
+3. 在 Firebase Console 的 Authentication 啟用 Phone，並在「電子郵件／密碼」供應商中同時啟用「電子郵件／密碼」及「電子郵件連結（不需要密碼即可登入）」。在 Authentication 設定的授權網域確認有 `naco727.github.io`。正式 SMS 需連結 Cloud Billing 並核對 Blaze、SMS 地區政策、實收簡訊及防濫用設定。測試手機號碼應使用模擬器或測試專案。若 Firestore 強制 App Check，須在測試用網域驗證網頁及既有 Worker 的存取方式後才能上線。參見 [Firebase 電子郵件連結登入](https://firebase.google.com/docs/auth/web/email-link-auth)、[Firebase Phone Authentication](https://firebase.google.com/docs/auth/web/phone-auth) 與 [SMS 計費說明](https://firebase.google.com/docs/auth/faq-and-troubleshooting)。
 4. 由擁有人確認真正的登入方式與新正式 UID。保留舊 Auth 帳號和 UID。以 Firebase Console 在 `memberships/{正式UID}` 建立 `role: "admin"`（或老師用 `"teacher"`）、`status: "active"`。只有確定可讀取該瀏覽器舊資料的擁有人才可加布林 `legacyImport: true`。
 5. 完成測試、取得批准後，先對照正式 Firestore Rules，把 `firestore.rules` 合併與核對後再發布至正式 `(default)`。依原設定保留相關已部署索引，另外將 `chunks.payload` 設為不索引。待正式 Rules、索引及角色確認後，才合併分支並由 GitHub Pages 從已驗證的分支部署。正式讀取或寫入需驗證 [Firebase 官方規則部署步驟](https://firebase.google.com/docs/firestore/security/get-started)。
 6. 按下方切換步驟準備及核對新空堂文件。正式 Worker 完成同一批空堂驗收後，再以 Console 設定 `legacyLineBridge/config.cutoverComplete: true`，停用舊集合寫入。原集合仍可保留供核對或回復。
 
 若日後支援多個 LINE Bot，可為各 Worker 環境配置不同的 `TEACHER_UID`，或以可信任的 LINE Channel 對應表選定 UID。
+
+## 電子郵件連結登入
+
+1. 在 TutorFlow 輸入電子郵件並點「寄送登入連結」，然後開啟信中的連結。同一瀏覽器可使用一小時內暫存的收信地址自動驗證。在其他裝置或瀏覽器開啟時，請輸入原收信地址。
+2. 既有 Firebase Email 帳號沿用同一信箱登入時，繼續使用原 UID 和會員角色。若管理員 UID 只有手機登入，請先用手機登入原帳號。用未綁定的信箱開啟連結會建立另一個帳號，須由管理員核准。
+3. 連結同時驗證信箱。Firebase 在權限權杖中仍將電子郵件連結識別為 `password` 提供者，因此沿用現有 Firestore Rules 的 UID、信箱驗證及會員權限檢查。
 
 ## LINE Bot 及公開空堂切換
 

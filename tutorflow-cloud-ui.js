@@ -10,23 +10,20 @@ function mountCloudControls() {
   $('#authSetupNotice').after(Object.assign(document.createElement('div'), {innerHTML: `
     <div id="cloudGateActions" class="form-actions" hidden>
       <small id="cloudGateIdentity"></small>
-      <button type="button" class="btn btn-secondary" id="verifyCloudEmail">寄出驗證信</button>
       <button type="button" class="btn btn-secondary" id="retryCloudAccount">重新檢查</button>
       <button type="button" class="btn btn-ghost" id="leaveCloudAccount">返回登入</button>
     </div>`}));
   $('#authLoginPanel').insertAdjacentHTML('afterbegin', `
-    <div class="segmented" role="group" aria-label="登入方式">
+    <div id="authMethods" class="segmented" role="group" aria-label="登入方式">
       <button type="button" data-auth-method="phone" class="active" aria-pressed="true">手機驗證碼</button>
-      <button type="button" data-auth-method="email" aria-pressed="false">Email＋密碼</button>
+      <button type="button" data-auth-method="email" aria-pressed="false">電子郵件連結</button>
     </div>`);
   $('#phoneAuthForm').insertAdjacentHTML('afterend', `
     <form id="emailAuthForm" hidden>
-      <div class="field"><label for="loginEmail">Email</label><input class="input" id="loginEmail" type="email" autocomplete="username" required></div>
-      <div class="field"><label for="loginPassword">密碼</label><input class="input" id="loginPassword" type="password" autocomplete="current-password" required></div>
+      <div class="field"><label for="loginEmail">電子郵件</label><input class="input" id="loginEmail" type="email" autocomplete="email" required></div>
       <div class="form-actions">
-        <button type="submit" class="btn btn-primary" value="login">登入</button>
-        <button type="submit" class="btn btn-secondary" value="register">申請帳號</button>
-        <button type="submit" class="btn btn-ghost" value="reset" formnovalidate>忘記密碼</button>
+        <button type="submit" class="btn btn-primary" id="emailLinkButton">寄送登入連結</button>
+        <button type="button" class="btn btn-ghost" id="leaveEmailLink" hidden>返回登入</button>
       </div>
     </form>`);
   $('.topbar').insertAdjacentHTML('afterend', `
@@ -140,7 +137,6 @@ function showCloudGate(message, user, retry = false) {
   showAuthSetup(message);
   $('#cloudGateActions').hidden = !user && !retry;
   $('#cloudGateIdentity').textContent = user ? `帳號 UID：${user.uid}` : '';
-  $('#verifyCloudEmail').hidden = !user?.email || user.emailVerified;
   $('#retryCloudAccount').hidden = !retry;
   $('#leaveCloudAccount').hidden = !user;
 }
@@ -321,8 +317,9 @@ async function observeCloudAccount(user) {
   try {
     const token = await user.getIdTokenResult();
     if (generation !== accountGeneration) return;
+    // Firebase also reports the password provider for email link sign-in.
     if (!['phone', 'password'].includes(token.signInProvider)) {
-      showCloudGate('請使用手機驗證碼或 Email＋密碼登入。', user);
+      showCloudGate('請使用手機驗證碼或電子郵件連結登入。', user);
       return;
     }
     const db = await firestoreDb();
@@ -355,7 +352,7 @@ async function observeCloudAccount(user) {
         return;
       }
       if (token.signInProvider === 'password' && !token.claims.email_verified) {
-        showCloudGate('請先驗證電子郵件，再重新檢查登入資格。', user, true);
+        showCloudGate('請返回登入，使用電子郵件連結驗證信箱。', user);
         return;
       }
       if (!active) {
@@ -398,7 +395,7 @@ async function observeCloudAccount(user) {
 function renderCloudAccount() {
   const session = cloudSession;
   if (!session) return;
-  $('#cloudAccount').textContent = `${session.user.email || session.user.phoneNumber || session.user.uid} · ${session.user.email ? 'Email＋密碼' : '手機'}${session.membership.role === 'admin' ? ' · 管理員' : ''}`;
+  $('#cloudAccount').textContent = `${session.user.email || session.user.phoneNumber || session.user.uid} · ${session.user.email ? '電子郵件' : '手機'}${session.membership.role === 'admin' ? ' · 管理員' : ''}`;
   $('#legacyBackup').hidden = session.membership.legacyImport !== true;
   $('#teacherAdmin').hidden = session.membership.role !== 'admin';
   $('#availabilitySyncScope').textContent = '同步後，空堂會儲存到你帳號下的公開文件。';
@@ -557,12 +554,5 @@ function bindCloudWorkspace() {
       }
       await observeCloudAccount(auth.currentUser);
     } catch (error) { showCloudGate(cloudErrorText(error), cloudGateIdentity, true); }
-  };
-  $('#verifyCloudEmail').onclick = async () => {
-    const user = cloudGateIdentity;
-    try {
-      await user.sendEmailVerification();
-      if (user === cloudGateIdentity) showCloudGate('已寄出驗證信。驗證後請選「重新檢查」。', user, true);
-    } catch (error) { if (user === cloudGateIdentity) showCloudGate(authErrorText(error), user, true); }
   };
 }

@@ -278,11 +278,11 @@
     function renderPublicModeMessage(message,kind='warning'){const list=$('#publicSlotList');if(!list)return;list.innerHTML=`<div class="availability-empty ${kind}">${esc(message)}</div>`}
     async function initPublicLiff(){const liffId=String(window.TUTORFLOW_LIFF_ID||'').trim();if(!liffId){renderPublicModeMessage('尚未設定 LIFF ID，仍可使用一般公開頁面。');return}try{await loadExternalScript(LIFF_SDK_URL);if(!window.liff?.init)throw new Error('LIFF SDK 載入後沒有 liff.init');await window.liff.init({liffId,withLoginOnExternalBrowser:false});const inClient=typeof window.liff.isInClient==='function'&&window.liff.isInClient(),loggedIn=typeof window.liff.isLoggedIn==='function'&&window.liff.isLoggedIn();const status=$('#publicLiffStatus');if(status)status.textContent=inClient?'LINE App 內建瀏覽器':'一般瀏覽器｜不需要 LINE 登入即可查看';if(loggedIn)status&&(status.textContent+='｜LINE 已連結')}catch(error){console.warn('[TutorFlow] LIFF 初始化未完成', {code:String(error?.code||'unknown'),message:String(error?.message||'未提供錯誤訊息')});const status=$('#publicLiffStatus');if(status)status.textContent='一般公開模式｜LINE 初始化未完成，仍可查看空堂'}}
     async function renderPublicMode(){document.body.className='public-mode';document.body.innerHTML='<main class="public-page"><div class="public-brand"><img src="./tutorflow-icon.jpg" alt="TutorFlow"/><div><h1>TutorFlow 空堂查詢</h1><p>查看老師可預約的家教時段</p></div></div><section class="card"><div class="section-head"><div><h2>可預約時段</h2><p id="publicLiffStatus">正在初始化公開頁面…</p></div></div><div id="publicSlotList" class="public-slot-list"><div class="availability-empty">正在讀取最新空堂…</div></div><div class="public-safe-note">資料只來自 Firestore publicAvailability；此頁面不顯示學生、課程紀錄、收費或聯絡資料。</div></section></main>';await initPublicLiff();if(!FIREBASE_CONFIG?.projectId){renderPublicModeMessage('目前無法讀取最新空堂：尚未設定 Firebase 專案。','warning');return}try{const slots=await readPublicAvailabilityFromFirestore();renderPublicModeSlots(slots)}catch(error){console.error('[TutorFlow] 公開空堂讀取失敗',{code:String(error?.code||'unknown'),message:String(error?.message||'未提供錯誤訊息'),projectId:String(FIREBASE_CONFIG.projectId),collection:PUBLIC_AVAILABILITY_COLLECTION});renderPublicModeMessage('目前無法讀取最新空堂，請稍後再試。','warning')}}
-    function authErrorText(error){const code=error?.code||'';const messages={'auth/invalid-phone-number':'手機號碼格式不正確，請輸入台灣手機號碼。','auth/missing-phone-number':'請輸入手機號碼。','auth/too-many-requests':'驗證請求過於頻繁，請稍後再試。','auth/quota-exceeded':'目前已達 Firebase 驗證額度，請稍後再試。','auth/invalid-verification-code':'驗證碼不正確，請重新確認。','auth/code-expired':'驗證碼已過期，請重新發送。','auth/captcha-check-failed':'reCAPTCHA 驗證失敗，請重新驗證。','auth/invalid-app-credential':'應用程式驗證失敗，請重新整理後再試。','auth/network-request-failed':'網路連線失敗，請檢查網路後再試。','auth/operation-not-allowed':'Firebase 尚未啟用 Phone Authentication。'};Object.assign(messages,{'auth/invalid-credential':'Email 或密碼有誤。','auth/weak-password':'密碼不符合 Firebase 的長度或強度規則。','auth/email-already-in-use':'這個 Email 已有帳號，請登入或重設密碼。','auth/invalid-email':'Email 格式有誤。','auth/user-disabled':'此 Firebase 帳號已停用。','auth/session-expired':'驗證碼已逾期，請重新發送。','auth/user-token-expired':'登入已逾期，請重新登入。'});return messages[code]||'登入失敗，請稍後再試。'}
+    function authErrorText(error){const code=error?.code||'';const messages={'auth/invalid-phone-number':'手機號碼格式不正確，請輸入台灣手機號碼。','auth/missing-phone-number':'請輸入手機號碼。','auth/too-many-requests':'驗證請求過於頻繁，請稍後再試。','auth/quota-exceeded':'目前已達 Firebase 驗證額度，請稍後再試。','auth/invalid-verification-code':'驗證碼不正確，請重新確認。','auth/code-expired':'驗證碼已過期，請重新發送。','auth/captcha-check-failed':'reCAPTCHA 驗證失敗，請重新驗證。','auth/invalid-app-credential':'應用程式驗證失敗，請重新整理後再試。','auth/network-request-failed':'網路連線失敗，請檢查網路後再試。','auth/operation-not-allowed':'Firebase 尚未啟用 Phone Authentication。','auth/user-disabled':'此 Firebase 帳號已停用。','auth/session-expired':'驗證碼已逾期，請重新發送。','auth/user-token-expired':'登入已逾期，請重新登入。'};return messages[code]||'登入失敗，請稍後再試。'}
     function normalizeTaiwanPhone(value){let digits=String(value||'').trim().replace(/[^\d+]/g,'');if(digits.startsWith('+886'))digits=digits.slice(4);else if(digits.startsWith('886'))digits=digits.slice(3);digits=digits.replace(/^0/,'');return /^9\d{8}$/.test(digits)?`+886${digits}`:''}
     function setAuthMessage(id,message,success=false){const el=$(id);if(!el)return;el.textContent=message||'';el.style.color=success?'var(--sage-dark)':'var(--rose-dark)'}
     function resetRecaptcha(){if(recaptchaVerifier){try{recaptchaVerifier.clear()}catch(error){}recaptchaVerifier=null}const container=$('#recaptcha-container');if(container)container.innerHTML=''}
-    function showAuthLogin(message=''){confirmationResult=null;$('#cloudGateActions').hidden=true;$('#authCode').value='';$('#loginPassword').value='';document.body.classList.add('auth-locked');$('#authGate')?.classList.remove('hidden');$('#authSetupNotice')?.classList.add('hidden');$('#authLoginPanel')?.classList.remove('hidden');$('#authCodePanel')?.classList.add('hidden');$('#logoutBtn')&&( $('#logoutBtn').hidden=true);$('#sendCodeBtn')&&( $('#sendCodeBtn').disabled=false);$('#verifyCodeBtn')&&( $('#verifyCodeBtn').disabled=false);setAuthMessage('#authMessage',message);setAuthMessage('#authCodeMessage','');resetRecaptcha()}
+    function showAuthLogin(message=''){confirmationResult=null;$('#cloudGateActions').hidden=true;$('#authCode').value='';document.body.classList.add('auth-locked');$('#authGate')?.classList.remove('hidden');$('#authSetupNotice')?.classList.add('hidden');$('#authLoginPanel')?.classList.remove('hidden');$('#authCodePanel')?.classList.add('hidden');$('#logoutBtn')&&( $('#logoutBtn').hidden=true);$('#sendCodeBtn')&&( $('#sendCodeBtn').disabled=false);$('#verifyCodeBtn')&&( $('#verifyCodeBtn').disabled=false);setAuthMessage('#authMessage',message);setAuthMessage('#authCodeMessage','');resetRecaptcha()}
     function showAuthSetup(message){document.body.classList.add('auth-locked');$('#authGate')?.classList.remove('hidden');$('#authSetupNotice')?.classList.remove('hidden');$('#authSetupNotice').textContent=message;$('#authLoginPanel')?.classList.add('hidden');$('#authCodePanel')?.classList.add('hidden');$('#logoutBtn')&&( $('#logoutBtn').hidden=true)}
     async function prepareRecaptcha(){const firebase=await ensureFirebase();if(recaptchaVerifier)return;recaptchaVerifier=new firebase.auth.RecaptchaVerifier('recaptcha-container',{size:'normal',callback:()=>setAuthMessage('#authMessage','人機驗證完成，現在可以發送驗證碼。',true),'expired-callback':()=>{setAuthMessage('#authMessage','reCAPTCHA 已過期，請重新驗證。');resetRecaptcha()}});await recaptchaVerifier.render()}
     async function sendPhoneCode(event){
@@ -342,48 +342,110 @@
       catch(error){setAuthMessage('#authCodeMessage',authErrorText(error))}
       finally{phoneVerifyBusy=false;$('#verifyCodeBtn').disabled=false}
     }
+    const emailLinkStorageKey='tutorflow.email-sign-in.'+FIREBASE_CONFIG?.projectId+location.pathname;
+    let emailSignInLink='';
+    let emailAuthBusy=false;
+    let emailLastSentAt=0;
+
+    function selectAuthMethod(method){
+      const email=method==='email';
+      const completing=Boolean(emailSignInLink);
+      $('#authMethods').hidden=completing;
+      $('#emailAuthForm').hidden=!email;
+      $('#phoneAuthForm').hidden=email;
+      $('#leaveEmailLink').hidden=!completing;
+      $('#emailLinkButton').textContent=completing?'確認並登入':'寄送登入連結';
+      $('#authLoginPanel > h2').textContent=email?'電子郵件連結登入':'老師登入';
+      $('#authLoginPanel > p').textContent=completing?'請確認寄送登入連結時使用的電子郵件。':email?'輸入電子郵件，開啟來信中的連結即可登入。':'使用 Firebase 手機驗證碼登入管理介面';
+      setAuthMessage('#authMessage','');
+      resetRecaptcha();
+      $$('[data-auth-method]').forEach(option=>{
+        const active=option.dataset.authMethod===method;
+        option.classList.toggle('active',active);
+        option.setAttribute('aria-pressed',String(active));
+      });
+    }
+    function rememberedLinkEmail(){
+      try{
+        const saved=JSON.parse(localStorage.getItem(emailLinkStorageKey));
+        if(typeof saved?.email==='string'&&Date.now()-saved.sentAt>=0&&Date.now()-saved.sentAt<60*60_000)return saved.email;
+        localStorage.removeItem(emailLinkStorageKey);
+      }catch{}
+      return '';
+    }
+    function emailLinkErrorText(error){
+      const messages={
+        'auth/invalid-email':'請確認電子郵件格式，以及是否和收信地址相同。',
+        'auth/invalid-action-code':'連結無效、已使用，或信箱不符。請確認地址，或返回登入重新寄送。',
+        'auth/invalid-credential':'連結無效或信箱不符。請確認收信地址，或返回登入重新寄送。',
+        'auth/expired-action-code':'登入連結已過期，請返回登入重新寄送。',
+        'auth/operation-not-allowed':'Firebase 尚未啟用電子郵件連結登入。',
+        'auth/unauthorized-continue-uri':'Firebase 尚未將此網站加入授權網域。',
+        'auth/invalid-continue-uri':'目前網址無法用於寄送登入連結，請從 TutorFlow 網站開啟。',
+        'auth/quota-exceeded':'目前已達登入郵件寄送上限，請稍後再試。'
+      };
+      return messages[error?.code]||authErrorText(error);
+    }
+    function observeAuthState(auth){
+      auth.onAuthStateChanged(observeCloudAccount,error=>showCloudGate(authErrorText(error),null,true));
+    }
+    function leaveEmailSignIn(auth){
+      emailSignInLink='';
+      try{history.replaceState(null,'',location.pathname)}catch{}
+      selectAuthMethod('email');
+      showCloudGate('正在確認登入狀態…',null);
+      observeAuthState(auth);
+    }
+    async function submitEmailLink(event){
+      event?.preventDefault();
+      if(emailAuthBusy)return;
+      const input=$('#loginEmail');
+      if(!input.reportValidity())return;
+      const email=input.value.trim();
+      const link=emailSignInLink;
+      const secondsToResend=Math.ceil((emailLastSentAt+60_000-Date.now())/1000);
+      if(!link&&secondsToResend>0){
+        setAuthMessage('#authMessage',`請等 ${secondsToResend} 秒再寄送登入連結。`);
+        return;
+      }
+      emailAuthBusy=true;
+      $('#emailLinkButton').disabled=true;
+      $('#leaveEmailLink').disabled=true;
+      input.readOnly=true;
+      setAuthMessage('#authMessage',link?'正在驗證登入連結…':'正在寄送登入連結…',true);
+      try{
+        const auth=await firebaseAuth();
+        if(link){
+          await auth.signInWithEmailLink(email,link);
+          try{localStorage.removeItem(emailLinkStorageKey)}catch{}
+          leaveEmailSignIn(auth);
+        }else{
+          const url=new URL(location.pathname,location.origin);
+          await auth.sendSignInLinkToEmail(email,{url:url.href,handleCodeInApp:true});
+          emailLastSentAt=Date.now();
+          try{localStorage.setItem(emailLinkStorageKey,JSON.stringify({email,sentAt:emailLastSentAt}))}catch{}
+          setAuthMessage('#authMessage','登入連結已寄出，請查看收件匣或垃圾郵件。',true);
+        }
+      }catch(error){
+        setAuthMessage('#authMessage',emailLinkErrorText(error));
+      }finally{
+        emailAuthBusy=false;
+        $('#emailLinkButton').disabled=false;
+        $('#leaveEmailLink').disabled=false;
+        input.readOnly=false;
+      }
+    }
     function bindAuthUI(){
       $('#phoneAuthForm').addEventListener('submit',sendPhoneCode);
       $('#verifyCodeForm').addEventListener('submit',verifyPhoneCode);
       $('#resendCodeBtn').onclick=resendPhoneCode;
       $('#changePhoneBtn').onclick=()=>{if(!phoneVerifyBusy){showAuthLogin();$('#authPhone').focus()}};
       $$('[data-auth-method]').forEach(button=>button.onclick=()=>{
-        if(phoneSendBusy||phoneVerifyBusy)return;
-        const email=button.dataset.authMethod==='email';
-        $('#emailAuthForm').hidden=!email;
-        $('#phoneAuthForm').hidden=email;
-        $('#authLoginPanel > h2').textContent=email?'Email＋密碼登入':'老師登入';
-        $('#authLoginPanel > p').hidden=email;
-        setAuthMessage('#authMessage','');
-        resetRecaptcha();
-        $$('[data-auth-method]').forEach(option=>{
-          option.classList.toggle('active',option===button);
-          option.setAttribute('aria-pressed',String(option===button));
-        });
+        if(!phoneSendBusy&&!phoneVerifyBusy&&!emailAuthBusy)selectAuthMethod(button.dataset.authMethod);
       });
-      $('#emailAuthForm').onsubmit=async event=>{
-        event.preventDefault();
-        const form=event.currentTarget,action=event.submitter?.value||'login';
-        const email=$('#loginEmail').value.trim(),password=$('#loginPassword').value;
-        if(!$('#loginEmail').checkValidity()){$('#loginEmail').reportValidity();return}
-        if(action!=='reset'&&!password){setAuthMessage('#authMessage','請輸入密碼。');return}
-        const buttons=Array.from(form.querySelectorAll('button'));
-        if(buttons.some(button=>button.disabled))return;
-        buttons.forEach(button=>button.disabled=true);
-        setAuthMessage('#authMessage','處理中…',true);
-        try{
-          const auth=await firebaseAuth();
-          if(action==='reset'){
-            try{await auth.sendPasswordResetEmail(email)}
-            catch(error){if(error.code!=='auth/user-not-found')throw error}
-            setAuthMessage('#authMessage','若此 Email 已註冊，請查收密碼重設信。',true);
-          }else if(action==='register'){
-            await auth.createUserWithEmailAndPassword(email,password);
-          }else{
-            await auth.signInWithEmailAndPassword(email,password);
-          }
-        }catch(error){setAuthMessage('#authMessage',authErrorText(error))}
-        finally{$('#loginPassword').value='';buttons.forEach(button=>button.disabled=false)}
+      $('#emailAuthForm').onsubmit=submitEmailLink;
+      $('#leaveEmailLink').onclick=async()=>{
+        if(!emailAuthBusy&&emailSignInLink)leaveEmailSignIn(await firebaseAuth());
       };
       for(const id of ['#logoutBtn','#leaveCloudAccount','#logoutCloudSettings']){
         $(id).onclick=async()=>{
@@ -402,7 +464,7 @@
       $('.mobile-nav').inert=false;
       $('#authGate').classList.add('hidden');
       $('#logoutBtn').hidden=false;
-      $('#loginPassword').value='';
+      $('#loginEmail').value='';
       $('#authCode').value='';
       if(!authenticatedAppStarted){
         bindNoteActions();bindFinanceAlerts();bindCalendarPreview();bindCalendarPeriod();bindClickGuard();
@@ -417,13 +479,34 @@
       mountCloudControls();
       bindCloudWorkspace();
       bindAuthUI();
+      selectAuthMethod('email');
       if(!FIREBASE_CONFIG?.apiKey||!FIREBASE_CONFIG?.authDomain||!FIREBASE_CONFIG?.projectId||!FIREBASE_CONFIG?.appId){
         showCloudGate('尚未設定 Firebase Web 設定。',null);return;
       }
       showCloudGate('正在確認登入狀態…',null);
       try{
         const auth=await firebaseAuth();
-        auth.onAuthStateChanged(observeCloudAccount,error=>showCloudGate(authErrorText(error),null,true));
+        if(!auth.isSignInWithEmailLink(location.href)){
+          observeAuthState(auth);
+          return;
+        }
+        emailSignInLink=location.href;
+        const user=await new Promise((resolve,reject)=>{
+          const stop=auth.onAuthStateChanged(
+            current=>{stop();resolve(current)},
+            error=>{stop();reject(error)}
+          );
+        });
+        showAuthLogin();
+        selectAuthMethod('email');
+        const email=rememberedLinkEmail();
+        $('#loginEmail').value=email;
+        if(email&&(!user||user.email?.toLowerCase()===email.toLowerCase())){
+          await submitEmailLink();
+        }else{
+          if(user)setAuthMessage('#authMessage','這個瀏覽器已有登入帳號。確認後將使用這封信登入。',true);
+          $('#loginEmail').focus();
+        }
       }catch(error){showCloudGate(`Firebase 初始化失敗：${authErrorText(error)}`,null)}
     }
     function normalizeLegacyStatuses(){let changed=false;data.courses.forEach(c=>{if(['student_leave','teacher_cancelled','pending','makeup'].includes(c.status)){c.status='cancelled';changed=true}});if(changed)save()}

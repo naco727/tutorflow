@@ -98,3 +98,53 @@ test('password registration, verification, reset, approval and two clients shari
     await Promise.all([app.delete(), device.delete()]);
   }
 });
+
+test('email sign-in links verify the email, reuse an existing UID and enforce membership', async () => {
+  const app = userApp('email-link'), device = userApp('email-link-device');
+  const auth = app.auth(), otherAuth = device.auth(), db = app.firestore();
+  const settings = {url: 'http://127.0.0.1:8765/', handleCodeInApp: true};
+  const existingEmail = 'existing-link-admin@example.invalid';
+  const newEmail = 'new-link-teacher@example.invalid';
+  let fixture;
+
+  async function linkFor(email) {
+    await auth.sendSignInLinkToEmail(email, settings);
+    const {oobCodes} = await emulatorCodes('oobCodes');
+    const link = oobCodes.find(item => item.email === email && item.requestType === 'EMAIL_SIGNIN')?.oobLink;
+    assert.ok(link);
+    assert.equal(otherAuth.isSignInWithEmailLink(link), true);
+    return link;
+  }
+
+  try {
+    const {user: existing} = await auth.createUserWithEmailAndPassword(existingEmail, 'Emulator-only-password1');
+    const originalUid = existing.uid;
+    fixture = await initializeTestEnvironment({projectId});
+    await fixture.withSecurityRulesDisabled(context => setDoc(doc(context.firestore(), 'memberships', originalUid), {role: 'admin', status: 'active'}));
+    await auth.signOut();
+
+    const adminLink = await linkFor(existingEmail);
+    const {user: admin} = await auth.signInWithEmailLink(existingEmail, adminLink);
+    assert.equal(admin.uid, originalUid);
+    assert.equal(admin.emailVerified, true);
+    const token = await admin.getIdTokenResult();
+    assert.equal(token.signInProvider, 'password');
+    assert.equal(token.claims.email_verified, true);
+    assert.equal((await db.collection('memberships').doc(originalUid).get()).data().role, 'admin');
+    assert.equal((await db.collection('memberships').get()).empty, false);
+    await workspaceStore(db, originalUid).load();
+    await assert.rejects(otherAuth.signInWithEmailLink(existingEmail, adminLink), {code: 'auth/invalid-action-code'});
+
+    const teacherLink = await linkFor(newEmail);
+    await assert.rejects(otherAuth.signInWithEmailLink('wrong-email@example.invalid', teacherLink));
+    const {user: teacher} = await otherAuth.signInWithEmailLink(newEmail, teacherLink);
+    assert.equal(teacher.emailVerified, true);
+    const teacherDb = device.firestore();
+    await teacherDb.collection('memberships').doc(teacher.uid).set({role: 'teacher', status: 'pending'});
+    await assert.rejects(workspaceStore(teacherDb, teacher.uid).load(), {code: 'permission-denied'});
+    await assert.rejects(workspaceStore(teacherDb, originalUid).load(), {code: 'permission-denied'});
+  } finally {
+    await fixture?.cleanup();
+    await Promise.all([app.delete(), device.delete()]);
+  }
+});
