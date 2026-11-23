@@ -125,3 +125,21 @@ test('only admin controls whether new pending memberships can be created', async
   await assertSucceeds(setDoc(doc(admin, 'systemSettings/main'), {signupOpen: true}));
   await assertSucceeds(setDoc(doc(applicant, membership('fresh-teacher')), {role: 'teacher', status: 'pending'}));
 });
+
+test('deleting memberships cannot be reactivated and retired UIDs cannot register again', async () => {
+  const uid = 'retiring-teacher';
+  const marker = 'retiredTeacherAccounts/' + uid;
+  await fixture.withSecurityRulesDisabled(async context => {
+    const db = context.firestore();
+    await setDoc(doc(db, membership(uid)), {role: 'teacher', status: 'deleting'});
+    await setDoc(doc(db, marker), {retired: true});
+  });
+  const teacher = as(uid), admin = as('admin');
+  await assertFails(getDoc(doc(teacher, head(uid))));
+  await assertFails(setDoc(doc(teacher, 'teachers/' + uid + '/public/publicAvailability'), {slots: []}));
+  await assertFails(updateDoc(doc(admin, membership(uid)), {status: 'active'}));
+  await assertFails(deleteDoc(doc(admin, marker)));
+  await assertFails(getDoc(doc(admin, marker)));
+  await fixture.withSecurityRulesDisabled(context => deleteDoc(doc(context.firestore(), membership(uid))));
+  await assertFails(setDoc(doc(teacher, membership(uid)), {role: 'teacher', status: 'pending'}));
+});

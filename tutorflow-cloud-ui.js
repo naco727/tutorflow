@@ -10,8 +10,10 @@ function mountCloudControls() {
   $('#authSetupNotice').after(Object.assign(document.createElement('div'), {innerHTML: `
     <div id="cloudGateActions" class="form-actions" hidden>
       <small id="cloudGateIdentity"></small>
+      <button type="button" class="btn btn-secondary" id="sendAccountVerification" hidden>重寄驗證信</button>
       <button type="button" class="btn btn-secondary" id="retryCloudAccount">重新檢查</button>
       <button type="button" class="btn btn-ghost" id="leaveCloudAccount">返回登入</button>
+      <p class="form-hint" id="verificationMessage" role="status" hidden></p>
     </div>`}));
   $('.topbar').insertAdjacentHTML('afterend', `
     <div class="cloud-sync-bar" aria-live="polite">
@@ -19,21 +21,19 @@ function mountCloudControls() {
       <button type="button" class="btn btn-secondary btn-sm" id="retryCloudSave" hidden>重試同步</button>
       <button type="button" class="btn btn-secondary btn-sm" id="reloadCloudData" hidden>重新載入雲端</button>
     </div>`);
-  $('#view-settings').insertAdjacentHTML('afterbegin', `
+  $('#settings-account').insertAdjacentHTML('afterbegin', `
     <section class="card cloud-settings">
       <div class="section-head"><div><h2>雲端帳號</h2><p id="cloudAccount"></p></div>
         <button type="button" class="btn btn-ghost" id="logoutCloudSettings">登出</button>
       </div>
-      <div class="form-actions">
-        <button type="button" class="btn btn-secondary" id="pendingDraft">匯出待同步草稿</button>
-        <button type="button" class="btn btn-secondary" id="legacyBackup" hidden>下載此瀏覽器的舊資料</button>
-      </div>
-    </section>
-    <section class="card cloud-settings" id="teacherAdmin" hidden>
+    </section>`);
+  $('#settings-teachers').insertAdjacentHTML('afterbegin', `
+    <section class="card cloud-settings" id="teacherAdmin">
       <div class="section-head"><h2>老師帳號管理</h2>
         <button type="button" class="btn btn-secondary" id="loadTeacherAdmin">載入帳號列表</button>
       </div>
       <button type="button" class="btn btn-ghost btn-sm" id="toggleSignup" hidden></button>
+      <p class="form-hint" id="teacherAdminSetup" hidden></p>
       <div id="teacherAdminRows"></div>
     </section>`);
   $('#availabilityPreview').insertAdjacentHTML('beforebegin', '<p class="form-hint" id="availabilitySyncScope"></p>');
@@ -41,7 +41,13 @@ function mountCloudControls() {
   availabilityCard.querySelector('h2').textContent = '空堂管理';
   availabilityCard.querySelector('.section-head p').textContent = '設定每週可授課時間，自動扣除已安排的課程。';
   $('[data-availability-action="preview"]').remove();
-  $('#exportData').closest('.card').querySelector('.section-head p').textContent = '下載目前工作區，或預覽並匯入 TutorFlow JSON。';
+  const backupCard = $('#exportData').closest('.card');
+  backupCard.querySelector('.section-head p').textContent = '下載目前工作區，或預覽並匯入 TutorFlow JSON。';
+  backupCard.insertAdjacentHTML('beforeend', `
+    <div class="form-actions">
+      <button type="button" class="btn btn-secondary" id="pendingDraft">匯出待同步草稿</button>
+      <button type="button" class="btn btn-secondary" id="legacyBackup" hidden>下載此瀏覽器的舊資料</button>
+    </div>`);
 }
 
 function cloudErrorText(error) {
@@ -60,12 +66,33 @@ function cloudStatus(text, retry = false) {
   $('#reloadCloudData').hidden = !cloudSession?.conflict;
 }
 
-function showCloudGate(message, user, retry = false) {
+function showCloudGate(message, user, retry = false, verifyEmail = false) {
   showAuthSetup(message);
   $('#cloudGateActions').hidden = !user && !retry;
   $('#cloudGateIdentity').textContent = user ? `帳號 UID：${user.uid}` : '';
   $('#retryCloudAccount').hidden = !retry;
   $('#leaveCloudAccount').hidden = !user;
+  $('#sendAccountVerification').hidden = !verifyEmail;
+  $('#verificationMessage').hidden = !verifyEmail;
+}
+
+async function sendAccountVerification(user) {
+  const button = $('#sendAccountVerification'), message = $('#verificationMessage');
+  if (!user?.email || user.emailVerified || button.disabled) return;
+  const auth = await firebaseAuth();
+  if (auth.currentUser?.uid !== user.uid || button.disabled) return;
+  button.disabled = true;
+  message.textContent = '正在寄送信箱驗證信…';
+  try {
+    await user.sendEmailVerification(authMailSettings());
+    if (auth.currentUser?.uid === user.uid) {
+      message.textContent = '驗證信已寄出。點開信中的連結後，回來按「重新檢查」。';
+    }
+  } catch (error) {
+    if (auth.currentUser?.uid === user.uid) message.textContent = authErrorText(error);
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function lockCloudAccount() {
@@ -244,9 +271,12 @@ async function observeCloudAccount(user) {
   try {
     const token = await user.getIdTokenResult();
     if (generation !== accountGeneration) return;
-    // Firebase reports the password provider for email link sign-in.
-    if (token.signInProvider !== 'password' || token.claims.email_verified !== true) {
-      showCloudGate('請返回登入，使用電子郵件連結進入工作區。', user);
+    if (token.signInProvider !== 'password') {
+      showCloudGate('請返回登入，使用電子郵件和密碼。', user);
+      return;
+    }
+    if (token.claims.email_verified !== true) {
+      showCloudGate('請先驗證信箱，再按「重新檢查」。', user, true, true);
       return;
     }
     const db = await firestoreDb();
@@ -279,7 +309,8 @@ async function observeCloudAccount(user) {
         return;
       }
       if (!active) {
-        showCloudGate(membership.status === 'disabled' ? '此老師帳號已停用。' : '帳號申請已送出，等待管理員核准。', user, true);
+        const messages = {disabled: '此老師帳號已停用。', deleting: '此帳號的雲端資料正在刪除。'};
+        showCloudGate(messages[membership.status] || '帳號申請已送出，等待管理員核准。', user, true);
         return;
       }
       if (opening || cloudSession) return;
@@ -320,21 +351,62 @@ function renderCloudAccount() {
   if (!session) return;
   $('#cloudAccount').textContent = `${session.user.email || session.user.uid}${session.membership.role === 'admin' ? ' · 管理員' : ''}`;
   $('#legacyBackup').hidden = session.membership.legacyImport !== true;
-  $('#teacherAdmin').hidden = session.membership.role !== 'admin';
+  const teacherTab = $('#settings-tab-teachers');
+  teacherTab.hidden = session.membership.role !== 'admin';
+  if (teacherTab.hidden && teacherTab.getAttribute('aria-selected') === 'true') {
+    selectSettingsTab($('#settings-tab-data'));
+  }
   $('#availabilitySyncScope').textContent = '同步後，空堂會儲存到你帳號下的公開文件。';
+}
+
+function selectSettingsTab(selected) {
+  for (const tab of $$('.settings-tab')) {
+    const active = tab === selected;
+    tab.setAttribute('aria-selected', String(active));
+    tab.tabIndex = active ? 0 : -1;
+    document.getElementById(tab.getAttribute('aria-controls')).hidden = !active;
+  }
+}
+
+function bindSettingsTabs() {
+  const tabs = $('.settings-tabs');
+  tabs.addEventListener('click', event => {
+    const tab = event.target.closest('.settings-tab');
+    if (tab && !tab.hidden) selectSettingsTab(tab);
+  });
+  tabs.addEventListener('keydown', event => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    const visible = [...tabs.querySelectorAll('.settings-tab:not([hidden])')];
+    const current = visible.indexOf(event.target);
+    if (current < 0) return;
+    event.preventDefault();
+    const index = event.key === 'Home' ? 0 : event.key === 'End' ? visible.length - 1 :
+      (current + (event.key === 'ArrowRight' ? 1 : -1) + visible.length) % visible.length;
+    selectSettingsTab(visible[index]);
+    visible[index].focus();
+  });
 }
 
 async function showTeacherAdmin() {
   const session = cloudSession;
   if (!session || session.membership.role !== 'admin') return;
   const output = $('#teacherAdminRows');
+  const adminOrigin = teacherAdminOrigin();
+  const setup = $('#teacherAdminSetup');
+  setup.hidden = Boolean(adminOrigin);
+  setup.textContent = '請先設定帳號管理服務，以顯示信箱及啟用刪除。';
   output.textContent = '正在讀取帳號…';
   try {
     const signupRef = session.db.collection('systemSettings').doc('main');
-    const [snapshot, signup] = await Promise.all([
-      session.db.collection('memberships').get({source: 'server'}), signupRef.get({source: 'server'})
+    const [snapshot, signup, emails] = await Promise.all([
+      session.db.collection('memberships').get({source: 'server'}), signupRef.get({source: 'server'}),
+      adminOrigin ? loadTeacherEmails(session, adminOrigin).catch(() => null) : null
     ]);
     if (session !== cloudSession) return;
+    if (adminOrigin && !emails) {
+      setup.textContent = '暫時無法取得帳號信箱，請重新載入帳號列表。';
+      setup.hidden = false;
+    }
     const toggle = $('#toggleSignup');
     const open = !signup.exists || signup.data().signupOpen === true;
     toggle.hidden = false;
@@ -358,16 +430,18 @@ async function showTeacherAdmin() {
       const row = document.createElement('div');
       row.className = 'data-action';
       const label = document.createElement('span');
-      label.textContent = `${doc.id} · ${{pending: '待核准', active: '使用中', disabled: '已停用'}[membership.status] || '未知狀態'}`;
+      const statuses = {pending: '待核准', active: '使用中', disabled: '已停用', deleting: '刪除處理中'};
+      const identity = emails?.get(doc.id) || `無可用信箱（${doc.id}）`;
+      label.textContent = `${identity} · ${statuses[membership.status] || '未知狀態'}`;
       row.append(label);
-      if (membership.role === 'teacher') {
+      if (membership.role === 'teacher' && doc.id !== session.user.uid && membership.status !== 'deleting') {
         const button = document.createElement('button');
         const status = membership.status === 'active' ? 'disabled' : 'active';
         button.type = 'button';
         button.className = 'btn btn-secondary';
         button.textContent = status === 'active' ? '核准' : '停用';
         button.onclick = async () => {
-          if (session !== cloudSession || !confirm(`確定要${button.textContent}帳號 ${doc.id}？`)) return;
+          if (session !== cloudSession || !confirm(`確定要${button.textContent}帳號 ${identity}？`)) return;
           button.disabled = true;
           try {
             await doc.ref.update({status});
@@ -378,10 +452,75 @@ async function showTeacherAdmin() {
         };
         row.append(button);
       }
+      if (adminOrigin && membership.role === 'teacher' && doc.id !== session.user.uid) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'btn btn-danger';
+        button.textContent = membership.status === 'deleting' ? '繼續刪除' : '刪除帳號';
+        button.onclick = () => confirmTeacherDeletion(session, doc.id, identity, adminOrigin, row);
+        row.append(button);
+      }
       output.append(row);
     }
   } catch (error) {
     if (session === cloudSession) output.textContent = cloudErrorText(error);
+  }
+}
+
+function teacherAdminOrigin() {
+  try {
+    const url = new URL(window.TUTORFLOW_ACCOUNT_ADMIN_URL);
+    if (url.protocol === 'https:' && !url.username && !url.password) {
+      return url.origin;
+    }
+  } catch {}
+  return '';
+}
+
+async function loadTeacherEmails(session, origin) {
+  const token = await session.user.getIdToken();
+  if (session !== cloudSession) return null;
+  const response = await fetch(origin + '/admin/teacher-emails', {
+    redirect: 'error', headers: {Authorization: `Bearer ${token}`}
+  });
+  const result = await response.json();
+  if (!response.ok || !Array.isArray(result.teachers)) throw Error('無法取得帳號信箱');
+  return new Map(result.teachers.map(({uid, email}) => [uid, email]));
+}
+
+async function confirmTeacherDeletion(session, uid, identity, origin, row) {
+  if (session !== cloudSession) return;
+  if (!confirm(`將永久刪除 ${identity} 的老師帳號及其學生、課程、教學紀錄、財務和公開空堂。確定刪除？`)) return;
+  row.querySelectorAll('button').forEach(button => { button.disabled = true; });
+  try {
+    const token = await session.user.getIdToken(true);
+    if (session !== cloudSession) return;
+    const response = await fetch(origin + '/admin/delete-teacher', {
+      method: 'POST',
+      redirect: 'error',
+      headers: {'Content-Type': 'application/json', Authorization: `Bearer ${token}`},
+      body: JSON.stringify({uid, confirmUid: uid})
+    });
+    const result = await response.json();
+    if (session !== cloudSession) return;
+    if (response.ok && result.deleted === true) {
+      toast('老師帳號及雲端紀錄已刪除。');
+    } else {
+      const messages = {
+        unauthenticated: '登入資格已失效，請重新登入。',
+        forbidden: '目前帳號沒有刪除權限。',
+        'protected-account': '這個帳號受到保護。',
+        'teacher-not-found': '找不到這個老師帳號，請重新載入列表。',
+        'concurrent-change': '帳號狀態已變更，請重新確認。',
+        'not-configured': '帳號管理服務還沒完成設定。',
+        'delete-incomplete': '帳號已鎖定。請按「繼續刪除」完成清理。'
+      };
+      toast(messages[result.code] || '暫時無法確認刪除結果，請重新載入列表。');
+    }
+  } catch {
+    if (session === cloudSession) toast('暫時無法確認刪除結果，請重新載入列表。');
+  } finally {
+    if (session === cloudSession) await showTeacherAdmin();
   }
 }
 
@@ -452,6 +591,7 @@ function exportCloudDrafts() {
 }
 
 function bindCloudWorkspace() {
+  bindSettingsTabs();
   $('#retryCloudSave').onclick = () => {
     if (cloudSession?.pending) flushWorkspace();
     else if (cloudSession) reloadCloudWorkspace();
@@ -467,6 +607,7 @@ function bindCloudWorkspace() {
   };
   $('#pendingDraft').onclick = exportCloudDrafts;
   $('#loadTeacherAdmin').onclick = showTeacherAdmin;
+  $('#sendAccountVerification').onclick = () => sendAccountVerification(cloudGateIdentity);
   $('#retryCloudAccount').onclick = async () => {
     try {
       const auth = await firebaseAuth();

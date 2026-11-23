@@ -45,10 +45,13 @@ service cloud.firestore {
       allow get: if supportedSession() && (request.auth.uid == uid || admin());
       allow list: if admin();
       allow create: if supportedSession() && request.auth.uid == uid && uid != legacyTestUid() && registrationsOpen()
+        && !exists(/databases/$(database)/documents/retiredTeacherAccounts/$(uid))
         && request.resource.data.keys().hasOnly(['role', 'status'])
         && request.resource.data.role == 'teacher' && request.resource.data.status == 'pending';
       // Admin can approve or disable teachers. Admin grants and protected flags are console-only.
       allow update: if admin() && uid != legacyTestUid() && resource.data.role == 'teacher'
+        && resource.data.status != 'deleting'
+        && !exists(/databases/$(database)/documents/retiredTeacherAccounts/$(uid))
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
         && request.resource.data.status in ['active', 'disabled'];
     }

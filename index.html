@@ -88,10 +88,21 @@
     @media(max-width:720px){.auth-gate{align-items:start;padding:18px 14px}.auth-card{margin-top:7vh;padding:22px 18px;border-radius:20px}}
     [hidden]{display:none!important}
     .cloud-sync-bar{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:16px;padding:10px 13px;background:#edf4ef;border-radius:11px;color:var(--sage-dark);font-size:14px}
-    .cloud-settings{margin-bottom:16px}
+    .settings-tabs{display:flex;gap:7px;margin-bottom:18px;padding:6px 2px 4px;border-bottom:1px solid var(--line)}
+    .settings-tab{min-width:0;min-height:44px;flex:0 1 auto;padding:8px clamp(9px,2.5vw,20px);border:1px solid var(--line);border-radius:13px 13px 8px 8px;background:#edece5;color:var(--muted);font:inherit;font-size:.92rem;font-weight:650;white-space:nowrap;cursor:pointer}
+    .settings-tab[aria-selected="true"]{transform:translateY(-4px);border-color:#b7c9ba;background:#e5efe5;box-shadow:0 3px 0 #b7c9ba;color:var(--sage-dark)}
+    .settings-tab:focus-visible{outline:2px solid var(--sage-dark);outline-offset:2px}
+    @media(max-width:600px){
+      .settings-tabs{gap:4px}
+      .settings-tab{flex:1 1 auto;padding-inline:5px;font-size:.8rem}
+    }
     .cloud-settings .data-action{overflow-wrap:anywhere}
+    .calendar-student-filter{display:flex;align-items:center;gap:10px;margin-bottom:12px;color:var(--muted);font-size:.9rem}
+    .calendar-student-filter label{flex:none;font-weight:650}
+    .calendar-student-filter select{width:min(100%,260px);min-width:0}
     #cloudGateActions,.auth-card .form-actions{flex-wrap:wrap}
     #cloudGateIdentity{overflow-wrap:anywhere}
+    #verificationMessage{flex-basis:100%;margin:0}
     #emailAuthForm .field{margin-top:12px}
   </style>
 </head>
@@ -101,13 +112,15 @@
       <div class="auth-brand"><img src="./tutorflow-icon.jpg" alt="TutorFlow"/><div><h1>TutorFlow</h1><p>家教管理小幫手</p></div></div>
       <div id="authSetupNotice" class="notice warning hidden"></div>
       <div id="authLoginPanel">
-        <h2>電子郵件連結登入</h2>
-        <p id="emailLoginHint" class="form-hint">輸入電子郵件，開啟來信中的連結即可登入。</p>
+        <h2>老師登入</h2>
+        <p class="form-hint">使用電子郵件和密碼登入。新帳號須驗證信箱並等待核准。</p>
         <form id="emailAuthForm">
           <div class="field"><label for="loginEmail">電子郵件</label><input class="input" id="loginEmail" type="email" autocomplete="email" required></div>
+          <div class="field"><label for="loginPassword">密碼</label><input class="input" id="loginPassword" type="password" autocomplete="current-password" required></div>
           <div class="form-actions">
-            <button type="submit" class="btn btn-primary" id="emailLinkButton">寄送登入連結</button>
-            <button type="button" class="btn btn-ghost" id="leaveEmailLink" hidden>返回登入</button>
+            <button type="submit" class="btn btn-primary" value="login">登入</button>
+            <button type="submit" class="btn btn-secondary" value="register">申請帳號</button>
+            <button type="button" class="btn btn-ghost" id="resetPasswordButton">設定或重設密碼</button>
           </div>
         </form>
         <div class="auth-message" id="authMessage"></div>
@@ -141,7 +154,7 @@
 
       <section class="view" id="view-students"><div class="toolbar"><div class="toolbar-left"><div class="search"><span>⌕</span><input class="input" id="studentSearch" placeholder="搜尋學生姓名或科目" /></div></div><div class="toolbar-right"><button class="btn btn-primary" id="addStudent">＋ 新增學生</button></div></div><div class="card"><div class="section-head"><div><h2>我的學生</h2><p id="studentCount"></p></div></div><div class="table-wrap"><table class="data-table"><thead><tr><th>學生</th><th>上課地點</th><th>鐘點費</th><th>課程</th><th></th></tr></thead><tbody id="studentTable"></tbody></table></div></div></section>
 
-      <section class="view" id="view-courses"><div class="toolbar"><div class="toolbar-left"><div class="segmented" id="courseViewSwitch"><button data-mode="month" class="active">月曆</button><button data-mode="week">週曆</button><button data-mode="list">清單</button></div><button class="btn btn-secondary btn-sm" id="todayBtn">今天</button></div><div class="toolbar-right"><button class="btn btn-primary" id="addCourse">＋ 新增課程</button></div></div><div id="courseContent"></div></section>
+      <section class="view" id="view-courses"><div class="toolbar"><div class="toolbar-left"><div class="segmented" id="courseViewSwitch"><button data-mode="month" class="active">月曆</button><button data-mode="week">週曆</button><button data-mode="list">清單</button></div><button class="btn btn-secondary btn-sm" id="todayBtn">今天</button></div><div class="toolbar-right"><button class="btn btn-primary" id="addCourse">＋ 新增課程</button></div></div><div class="calendar-student-filter" id="calendarStudentFilter" hidden><label for="monthStudent">顯示學生</label><select class="select" id="monthStudent"></select></div><div id="courseContent"></div></section>
 
       <section class="view" id="view-notes"><div class="toolbar"><div class="toolbar-left"><div class="search"><span>⌕</span><input class="input" id="noteSearch" placeholder="搜尋學生或教學內容" /></div></div><div class="toolbar-right"><button class="btn btn-primary" id="addNote">＋ 新增紀錄</button></div></div><div class="card"><div class="section-head"><div><h2>教學紀錄</h2><p>每一次課堂，都留下進步的軌跡</p></div></div><div id="notesList" class="grid" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr))"></div></div></section>
 
@@ -149,7 +162,26 @@
 
       <section class="view" id="view-reports"><div class="toolbar"><div><h2 style="margin:0;font-size:20px">月度報表</h2><p style="margin:3px 0;color:var(--muted);font-size:12px">掌握每個月的教學節奏與收入</p></div><input class="input" type="month" id="reportMonth" style="width:auto" /></div><div class="grid report-grid" id="reportStats" style="margin-bottom:16px"></div><div class="grid split-grid"><div class="card"><div class="section-head"><div><h2>學生別統計</h2><p>本月授課與收入分布</p></div></div><div id="studentReport"></div></div><div class="card"><div class="section-head"><div><h2>課程狀態</h2><p>本月所有課程安排</p></div></div><div id="statusReport"></div><div class="legend"><span><i></i>已完成</span><span><i class="lav"></i>其他安排</span></div></div></div></section>
 
-<section class="view" id="view-settings"><div class="grid settings-grid"><div class="card"><div class="section-head"><div><h2>資料備份</h2><p>資料只保存在這個瀏覽器中</p></div></div><div class="data-action"><div><h3>匯出 JSON</h3><p>下載全部學生、課程與紀錄</p></div><button class="btn btn-secondary" id="exportData">下載檔案</button></div><div class="data-action"><div><h3>匯入 JSON</h3><p>從備份檔案還原資料</p></div><button class="btn btn-secondary" id="importData">選擇檔案</button><input type="file" id="importFile" accept="application/json" class="hidden" /></div></div><div class="card"><div class="section-head"><div><h2>資料維護</h2><p>請謹慎使用清除功能</p></div></div><div class="data-action"><div><h3>目前資料筆數</h3><p id="dataSummary"></p></div><span class="badge paid">已保存</span></div><div class="data-action"><div><h3>清除全部資料</h3><p>刪除後無法自動復原，建議先匯出備份。</p></div><button class="btn btn-danger" id="clearData">清除資料</button></div></div></div><div class="card" style="margin-top:16px"><div class="section-head"><div><h2>使用提醒</h2><p>TutorFlow 的計算規則</p></div></div><div class="notice info">新增課程時會把當下學生鐘點費保存為「費率快照」。即使之後調整學生費率，過去課程的收入仍維持原本金額。</div><div class="notice info">新增課程時可設定「每天重複」或「每週重複」，系統會一次建立多堂課並逐堂檢查重疊。</div><div class="notice warning" style="margin-bottom:0">課程時間不可重疊，結束時間必須晚於開始時間；儲存前系統會檢查並提示。</div></div><div class="card availability-card" style="margin-top:16px"><div class="section-head"><div><h2>家長空堂查詢</h2><p>設定每週有空的時間區間，再同步給家長查詢</p></div><span class="badge scheduled" id="availabilityStatus">尚未同步</span></div><div class="notice info">本機學生、課程與收費資料不會上傳；公開資料只包含日期、起訖時間與 available 狀態。空堂不切成固定長度，直接顯示每段可預約區間；剩餘 30 分鐘或更短的區間不會公開或上傳。</div><div class="field"><label>查詢未來天數</label><input class="input" id="availabilityHorizon" type="number" min="1" max="180" step="1" value="60"/><div class="form-hint">只會產生公開空堂，不會修改課程資料。</div></div><div class="field" style="margin-top:14px"><label>每週可授課時間</label><div id="availabilitySchedule" class="availability-schedule"></div></div><div class="form-actions"><button type="button" class="btn btn-secondary" data-availability-action="calculate">重新計算空堂</button><button type="button" class="btn btn-primary" data-availability-action="sync">同步空堂</button><button type="button" class="btn btn-ghost" data-availability-action="preview">家長預覽</button></div><div id="availabilityPreview" class="availability-preview"></div></div></section>
+      <section class="view" id="view-settings">
+        <div class="settings-tabs" role="tablist" aria-label="資料管理">
+          <button class="settings-tab" type="button" id="settings-tab-account" role="tab" aria-controls="settings-account" aria-selected="false" tabindex="-1">帳號</button>
+          <button class="settings-tab" type="button" id="settings-tab-teachers" role="tab" aria-controls="settings-teachers" aria-selected="false" tabindex="-1" hidden>老師管理</button>
+          <button class="settings-tab" type="button" id="settings-tab-availability" role="tab" aria-controls="settings-availability" aria-selected="false" tabindex="-1">空堂</button>
+          <button class="settings-tab" type="button" id="settings-tab-data" role="tab" aria-controls="settings-data" aria-selected="true" tabindex="0">資料</button>
+          <button class="settings-tab" type="button" id="settings-tab-tips" role="tab" aria-controls="settings-tips" aria-selected="false" tabindex="-1">提醒</button>
+        </div>
+        <div id="settings-account" role="tabpanel" aria-labelledby="settings-tab-account" tabindex="0" hidden></div>
+        <div id="settings-teachers" role="tabpanel" aria-labelledby="settings-tab-teachers" tabindex="0" hidden></div>
+        <div id="settings-availability" role="tabpanel" aria-labelledby="settings-tab-availability" tabindex="0" hidden>
+          <div class="card availability-card"><div class="section-head"><div><h2>家長空堂查詢</h2><p>設定每週有空的時間區間，再同步給家長查詢</p></div><span class="badge scheduled" id="availabilityStatus">尚未同步</span></div><div class="notice info">公開空堂只包含日期、起訖時間與可預約狀態。空堂不切成固定長度，直接顯示每段可預約區間；剩餘 30 分鐘或更短的區間不會公開或上傳。</div><div class="field"><label>查詢未來天數</label><input class="input" id="availabilityHorizon" type="number" min="1" max="180" step="1" value="60"/><div class="form-hint">只會產生公開空堂，不會修改課程資料。</div></div><div class="field" style="margin-top:14px"><label>每週可授課時間</label><div id="availabilitySchedule" class="availability-schedule"></div></div><div class="form-actions"><button type="button" class="btn btn-secondary" data-availability-action="calculate">重新計算空堂</button><button type="button" class="btn btn-primary" data-availability-action="sync">同步空堂</button><button type="button" class="btn btn-ghost" data-availability-action="preview">家長預覽</button></div><div id="availabilityPreview" class="availability-preview"></div></div>
+        </div>
+        <div id="settings-data" role="tabpanel" aria-labelledby="settings-tab-data" tabindex="0">
+          <div class="grid settings-grid"><div class="card"><div class="section-head"><div><h2>資料備份</h2><p>資料只保存在這個瀏覽器中</p></div></div><div class="data-action"><div><h3>匯出 JSON</h3><p>下載全部學生、課程與紀錄</p></div><button class="btn btn-secondary" id="exportData">下載檔案</button></div><div class="data-action"><div><h3>匯入 JSON</h3><p>從備份檔案還原資料</p></div><button class="btn btn-secondary" id="importData">選擇檔案</button><input type="file" id="importFile" accept="application/json" class="hidden" /></div></div><div class="card"><div class="section-head"><div><h2>資料維護</h2><p>請謹慎使用清除功能</p></div></div><div class="data-action"><div><h3>目前資料筆數</h3><p id="dataSummary"></p></div><span class="badge paid">已保存</span></div><div class="data-action"><div><h3>清除全部資料</h3><p>刪除後無法自動復原，建議先匯出備份。</p></div><button class="btn btn-danger" id="clearData">清除資料</button></div></div></div>
+        </div>
+        <div id="settings-tips" role="tabpanel" aria-labelledby="settings-tab-tips" tabindex="0" hidden>
+          <div class="card"><div class="section-head"><div><h2>使用提醒</h2><p>TutorFlow 的計算規則</p></div></div><div class="notice info">新增課程時會把當下學生鐘點費保存為「費率快照」。即使之後調整學生費率，過去課程的收入仍維持原本金額。</div><div class="notice info">新增課程時可設定「每天重複」或「每週重複」，系統會一次建立多堂課並逐堂檢查重疊。</div><div class="notice warning" style="margin-bottom:0">課程時間不可重疊，結束時間必須晚於開始時間；儲存前系統會檢查並提示。</div></div>
+        </div>
+      </section>
     </main>
   </div>
   <nav class="mobile-nav" id="mobileNav"><button class="active" data-view="dashboard"><span>⌂</span>首頁</button><button data-view="students"><span>♧</span>學生</button><button data-view="courses"><span>▣</span>課程</button><button data-view="finance"><span>◒</span>收入</button><button data-view="settings"><span>☰</span>更多</button></nav>
@@ -185,7 +217,7 @@
       const s3={id:'s_cathy',name:'王凱蒂',subject:'國小全科',phone:'09XX-345-678',email:'cathy@example.com',location:'教室',rate:700,color:'apricot',memo:''};
       return {students:[s1,s2,s3],courses:[{id:'c_demo1',studentId:s1.id,date:d1,start:'14:00',end:'15:30',status:'completed',rateSnapshot:850,paid:true,title:'英文閱讀與文法',location:'線上',memo:''},{id:'c_demo2',studentId:s2.id,date:d1,start:'19:00',end:'20:30',status:'scheduled',rateSnapshot:1000,paid:false,title:'二次函數複習',location:'學生家',memo:''},{id:'c_demo3',studentId:s3.id,date:d2,start:'10:00',end:'11:00',status:'completed',rateSnapshot:700,paid:false,title:'自然科學實驗',location:'教室',memo:''}],notes:[{id:'n_demo1',courseId:'c_demo1',studentId:s1.id,date:d1,content:'完成短篇閱讀，練習抓主旨與關鍵字。',performance:'能主動使用上下文推敲生字。',weakness:'介系詞搭配仍需加強。',homework:'完成 Unit 4 閱讀題組。',nextPlan:'複習介系詞並進入段落寫作。'}],initialized:true};
     }
-    let data=null, state={view:'dashboard',courseMode:'month',calendarDate:new Date(),editingCourse:null,financeFilter:'all'};
+    let data=null, state={view:'dashboard',courseMode:'month',calendarDate:new Date(),editingCourse:null,financeFilter:'all',monthStudentId:''};
     function save(){queueWorkspaceSave()}
     const availabilityDayNames=['日','一','二','三','四','五','六'];
     const loopback=['localhost','127.0.0.1','[::1]'].includes(location.hostname);
@@ -292,6 +324,17 @@
     async function renderPublicMode(){document.body.className='public-mode';document.body.innerHTML='<main class="public-page"><div class="public-brand"><img src="./tutorflow-icon.jpg" alt="TutorFlow"/><div><h1>TutorFlow 空堂查詢</h1><p>查看老師可預約的家教時段</p></div></div><section class="card"><div class="section-head"><div><h2>可預約時段</h2><p id="publicLiffStatus">正在初始化公開頁面…</p></div></div><div id="publicSlotList" class="public-slot-list"><div class="availability-empty">正在讀取最新空堂…</div></div><div class="public-safe-note">資料只來自 Firestore publicAvailability；此頁面不顯示學生、課程紀錄、收費或聯絡資料。</div></section></main>';await initPublicLiff();if(!FIREBASE_CONFIG?.projectId){renderPublicModeMessage('目前無法讀取最新空堂：尚未設定 Firebase 專案。','warning');return}try{const slots=await readPublicAvailabilityFromFirestore();renderPublicModeSlots(slots)}catch(error){console.error('[TutorFlow] 公開空堂讀取失敗',{code:String(error?.code||'unknown'),message:String(error?.message||'未提供錯誤訊息'),projectId:String(FIREBASE_CONFIG.projectId),collection:PUBLIC_AVAILABILITY_COLLECTION});renderPublicModeMessage('目前無法讀取最新空堂，請稍後再試。','warning')}}
     function authErrorText(error){
       const messages={
+        'auth/email-already-in-use':'這個信箱已有帳號，請登入或設定／重設密碼。',
+        'auth/invalid-email':'請輸入有效的電子郵件。',
+        'auth/invalid-credential':'信箱或密碼不正確。新使用者可申請帳號，舊帳號可重設密碼。',
+        'auth/invalid-login-credentials':'信箱或密碼不正確。新使用者可申請帳號，舊帳號可重設密碼。',
+        'auth/user-not-found':'找不到帳號，請確認信箱或先申請帳號。',
+        'auth/wrong-password':'密碼不正確，可使用重設密碼。',
+        'auth/weak-password':'密碼至少需要 6 個字元，並須符合 Firebase 密碼規則。',
+        'auth/password-does-not-meet-requirements':'密碼未達 Firebase 密碼要求，請使用更長且包含不同類型字元的密碼。',
+        'auth/operation-not-allowed':'Firebase 尚未啟用電子郵件／密碼登入。',
+        'auth/unauthorized-continue-uri':'Firebase 尚未授權此網站的網域。',
+        'auth/quota-exceeded':'目前已達郵件寄送上限，請稍後再試。',
         'auth/too-many-requests':'驗證請求過於頻繁，請稍後再試。',
         'auth/network-request-failed':'網路連線失敗，請檢查網路後再試。',
         'auth/user-disabled':'此 Firebase 帳號已停用。',
@@ -311,9 +354,8 @@
       $('#authSetupNotice').classList.add('hidden');
       $('#authLoginPanel').classList.remove('hidden');
       $('#logoutBtn').hidden=true;
-      $('#leaveEmailLink').hidden=!emailSignInLink;
-      $('#emailLinkButton').textContent=emailSignInLink?'確認並登入':'寄送登入連結';
-      $('#emailLoginHint').textContent=emailSignInLink?'請確認寄送登入連結時使用的電子郵件。':'輸入電子郵件，開啟來信中的連結即可登入。';
+      $('#loginPassword').value='';
+      $('#verificationMessage').textContent='';
       setAuthMessage('');
     }
     function showAuthSetup(message){
@@ -324,85 +366,52 @@
       $('#authLoginPanel').classList.add('hidden');
       $('#logoutBtn').hidden=true;
     }
-    const emailLinkStorageKey='tutorflow.email-sign-in.'+FIREBASE_CONFIG?.projectId+location.pathname;
-    let emailSignInLink='';
     let emailAuthBusy=false;
-    let emailLastSentAt=0;
+    function authMailSettings(){return {url:new URL(location.pathname,location.origin).href}}
 
-    function rememberedLinkEmail(){
-      try{
-        const saved=JSON.parse(localStorage.getItem(emailLinkStorageKey));
-        if(typeof saved?.email==='string'&&Date.now()-saved.sentAt>=0&&Date.now()-saved.sentAt<60*60_000)return saved.email;
-        localStorage.removeItem(emailLinkStorageKey);
-      }catch{}
-      return '';
-    }
-    function emailLinkErrorText(error){
-      const messages={
-        'auth/invalid-email':'請確認電子郵件格式，以及是否和收信地址相同。',
-        'auth/invalid-action-code':'連結無效、已使用，或信箱不符。請確認地址，或返回登入重新寄送。',
-        'auth/invalid-credential':'連結無效或信箱不符。請確認收信地址，或返回登入重新寄送。',
-        'auth/expired-action-code':'登入連結已過期，請返回登入重新寄送。',
-        'auth/operation-not-allowed':'Firebase 尚未啟用電子郵件連結登入。',
-        'auth/unauthorized-continue-uri':'Firebase 尚未將此網站加入授權網域。',
-        'auth/invalid-continue-uri':'目前網址無法用於寄送登入連結，請從 TutorFlow 網站開啟。',
-        'auth/quota-exceeded':'目前已達登入郵件寄送上限，請稍後再試。'
-      };
-      return messages[error?.code]||authErrorText(error);
-    }
-    function observeAuthState(auth){
-      auth.onAuthStateChanged(observeCloudAccount,error=>showCloudGate(authErrorText(error),null,true));
-    }
-    function leaveEmailSignIn(auth){
-      emailSignInLink='';
-      try{history.replaceState(null,'',location.pathname)}catch{}
-      showCloudGate('正在確認登入狀態…',null);
-      observeAuthState(auth);
-    }
-    async function submitEmailLink(event){
-      event?.preventDefault();
-      if(emailAuthBusy)return;
-      const input=$('#loginEmail');
-      if(!input.reportValidity())return;
-      const email=input.value.trim();
-      const link=emailSignInLink;
-      const secondsToResend=Math.ceil((emailLastSentAt+60_000-Date.now())/1000);
-      if(!link&&secondsToResend>0){
-        setAuthMessage(`請等 ${secondsToResend} 秒再寄送登入連結。`);
+    async function runEmailAuth(action){
+      const form=$('#emailAuthForm'), address=$('#loginEmail'), secret=$('#loginPassword');
+      if(emailAuthBusy||!address.reportValidity())return;
+      if(action!=='reset'&&!secret.reportValidity())return;
+      const email=address.value.trim(), password=secret.value;
+      if(action==='register'&&password.length<6){
+        setAuthMessage('申請帳號時，密碼至少需要 6 個字元。');
+        secret.focus();
         return;
       }
       emailAuthBusy=true;
-      $('#emailLinkButton').disabled=true;
-      $('#leaveEmailLink').disabled=true;
-      input.readOnly=true;
-      setAuthMessage(link?'正在驗證登入連結…':'正在寄送登入連結…',true);
+      const buttons=form.querySelectorAll('button');
+      buttons.forEach(button=>{button.disabled=true});
+      form.setAttribute('aria-busy','true');
+      const working={register:'正在申請帳號…',login:'正在登入…',reset:'正在寄送密碼設定信…'};
+      setAuthMessage(working[action],true);
       try{
         const auth=await firebaseAuth();
-        if(link){
-          await auth.signInWithEmailLink(email,link);
-          try{localStorage.removeItem(emailLinkStorageKey)}catch{}
-          leaveEmailSignIn(auth);
+        if(action==='register'){
+          const {user}=await auth.createUserWithEmailAndPassword(email,password);
+          await sendAccountVerification(user);
+        }else if(action==='reset'){
+          try{await auth.sendPasswordResetEmail(email,authMailSettings())}
+          catch(error){if(error.code!=='auth/user-not-found')throw error}
+          setAuthMessage('若此信箱已有帳號，密碼設定信會寄到該信箱。',true);
         }else{
-          const url=new URL(location.pathname,location.origin);
-          await auth.sendSignInLinkToEmail(email,{url:url.href,handleCodeInApp:true});
-          emailLastSentAt=Date.now();
-          try{localStorage.setItem(emailLinkStorageKey,JSON.stringify({email,sentAt:emailLastSentAt}))}catch{}
-          setAuthMessage('登入連結已寄出，請查看收件匣或垃圾郵件。',true);
+          await auth.signInWithEmailAndPassword(email,password);
         }
       }catch(error){
-        setAuthMessage(emailLinkErrorText(error));
+        setAuthMessage(authErrorText(error));
       }finally{
         emailAuthBusy=false;
-        $('#emailLinkButton').disabled=false;
-        $('#leaveEmailLink').disabled=false;
-        input.readOnly=false;
+        if(action!=='reset')secret.value='';
+        buttons.forEach(button=>{button.disabled=false});
+        form.removeAttribute('aria-busy');
       }
     }
     function bindAuthUI(){
-      $('#emailAuthForm').onsubmit=submitEmailLink;
-      $('#leaveEmailLink').onclick=async()=>{
-        if(!emailAuthBusy&&emailSignInLink)leaveEmailSignIn(await firebaseAuth());
+      $('#emailAuthForm').onsubmit=event=>{
+        event.preventDefault();
+        runEmailAuth(event.submitter?.value==='register'?'register':'login');
       };
+      $('#resetPasswordButton').onclick=()=>runEmailAuth('reset');
       for(const id of ['#logoutBtn','#leaveCloudAccount','#logoutCloudSettings']){
         $(id).onclick=async()=>{
           if(cloudSession?.pending&&!retainDraft(cloudSession)){
@@ -423,6 +432,10 @@
       $('#loginEmail').value='';
       if(!authenticatedAppStarted){
         bindNoteActions();bindFinanceAlerts();bindCalendarPreview();bindCalendarPeriod();bindClickGuard();
+        $('#monthStudent').addEventListener('change',event=>{
+          state.monthStudentId=event.target.value;
+          $('#courseContent').innerHTML=monthCalendar();
+        });
         bindYearWheel();bindPickerAutoScroll();bindStableTimePickers();bindTimePickerPosition();bindCustomPickers();
         bindPreviewStatus();bind();bindQuickStatus();bindCalendarDrag();
         authenticatedAppStarted=true;
@@ -440,26 +453,8 @@
       showCloudGate('正在確認登入狀態…',null);
       try{
         const auth=await firebaseAuth();
-        if(!auth.isSignInWithEmailLink(location.href)){
-          observeAuthState(auth);
-          return;
-        }
-        emailSignInLink=location.href;
-        const user=await new Promise((resolve,reject)=>{
-          const stop=auth.onAuthStateChanged(
-            current=>{stop();resolve(current)},
-            error=>{stop();reject(error)}
-          );
-        });
-        showAuthLogin();
-        const email=rememberedLinkEmail();
-        $('#loginEmail').value=email;
-        if(email&&(!user||user.email?.toLowerCase()===email.toLowerCase())){
-          await submitEmailLink();
-        }else{
-          if(user)setAuthMessage('這個瀏覽器已有登入帳號。確認後將使用這封信登入。',true);
-          $('#loginEmail').focus();
-        }
+        auth.languageCode='zh-TW';
+        auth.onAuthStateChanged(observeCloudAccount,error=>showCloudGate(authErrorText(error),null,true));
       }catch(error){showCloudGate(`Firebase 初始化失敗：${authErrorText(error)}`,null)}
     }
     function normalizeLegacyStatuses(){let changed=false;data.courses.forEach(c=>{if(['student_leave','teacher_cancelled','pending','makeup'].includes(c.status)){c.status='cancelled';changed=true}});if(changed)save()}
@@ -479,14 +474,29 @@
     function renderDashboard(){const today=todayISO(), todayCourses=data.courses.filter(c=>c.date===today).sort((a,b)=>a.start.localeCompare(b.start)), upcoming=data.courses.filter(c=>c.date>=today).sort((a,b)=>(a.date+a.start).localeCompare(b.date+b.start)).slice(0,4), month=currentMonth(), mc=monthCourses(month), bill=mc.filter(isBillable), due=bill.reduce((a,c)=>a+courseAmount(c),0), paid=bill.filter(c=>c.paid).reduce((a,c)=>a+courseAmount(c),0);$('#dashboardStats').innerHTML=`<div class="stat-card"><span class="stat-icon">☀</span><div class="stat-label">今日課程</div><div class="stat-value">${todayCourses.length}<small style="font-size:14px;font-weight:700"> 堂</small></div><div class="stat-sub">${todayCourses.length?'準備好迎接今天的教學':'今天沒有排課'}</div></div><div class="stat-card apricot"><span class="stat-icon">◒</span><div class="stat-label">本月授課收入</div><div class="stat-value">${fmtMoney(due).replace('NT$ ','')}</div><div class="stat-sub">${bill.length} 堂已完成課程</div></div><div class="stat-card lavender"><span class="stat-icon">✓</span><div class="stat-label">已收款</div><div class="stat-value">${fmtMoney(paid).replace('NT$ ','')}</div><div class="stat-sub">本月已完成收款</div></div><div class="stat-card rose"><span class="stat-icon">⏳</span><div class="stat-label">待收款</div><div class="stat-value">${fmtMoney(due-paid).replace('NT$ ','')}</div><div class="stat-sub">記得和學生確認款項</div></div>`;$('#todayLabel').textContent=`${fmtDate(today,'full')} · ${todayCourses.length} 堂課`;$('#todayLessons').innerHTML=todayCourses.length?todayCourses.map(c=>lessonHtml(c,true)).join(''):`<div class="empty"><div class="empty-icon">🌿</div>今天沒有課程，享受一點留白吧</div>`;$('#upcomingLessons').innerHTML=upcoming.length?upcoming.map(c=>lessonHtml(c,false)).join(''):`<div class="empty">還沒有近期課程安排</div>`}
     function renderStudents(){const q=($('#studentSearch')?.value||'').toLowerCase().trim(), students=activeStudents(), rows=students.filter(s=>`${s.name} ${s.subject} ${s.location||''}`.toLowerCase().includes(q));$('#studentCount').textContent=`共 ${students.length} 位學生${q?' · 搜尋結果 '+rows.length+' 位':''}`;$('#studentTable').innerHTML=rows.length?rows.map((s,i)=>{const count=data.courses.filter(c=>c.studentId===s.id).length;return `<tr><td><div class="student-cell"><div class="student-avatar ${s.color||palette[i%3]}">${esc(s.name.slice(0,1))}</div><div><strong>${esc(s.name)}</strong><small>${esc(s.subject||'尚未設定科目')}</small></div></div></td><td>${esc(s.location||'未設定')}</td><td><strong>${fmtMoney(s.rate)}</strong><br><small style="color:var(--muted)">每小時</small></td><td>${count} 堂</td><td><div class="actions"><button class="icon-btn" title="編輯" data-edit-student="${s.id}">✎</button><button class="icon-btn delete" title="刪除" data-delete-student="${s.id}">×</button></div></td></tr>`}).join(''):`<tr><td colspan="5"><div class="empty"><div class="empty-icon">♧</div>${q?'找不到符合的學生':'還沒有學生，先新增一位吧'}</div></td></tr>`}
     function monthLabel(d){return `${d.getFullYear()} 年 ${d.getMonth()+1} 月`}
-    function renderCourses(){materializeRecurrences();const el=$('#courseContent');if(state.courseMode==='list'){const sorted=[...data.courses].sort((a,b)=>(a.date+a.start).localeCompare(b.date+b.start));el.innerHTML=`<div class="card"><div class="section-head"><div><h2>所有課程</h2><p>共 ${sorted.length} 堂課程</p></div></div><div class="table-wrap"><table class="data-table"><thead><tr><th>日期時間</th><th>學生與課程</th><th>時數</th><th>狀態</th><th>應收</th><th></th></tr></thead><tbody>${sorted.length?sorted.map(c=>`<tr><td>${fmtDate(c.date)}<br><small style="color:var(--muted)">${c.start}–${c.end}</small></td><td><strong>${esc(student(c.studentId).name)}</strong><br><small style="color:var(--muted)">${esc(c.title||student(c.studentId).subject)}</small></td><td>${courseHours(c).toFixed(1)} 小時</td><td>${badge(c.status)}</td><td>${isBillable(c)?fmtMoney(courseAmount(c)):'—'}</td><td><div class="actions"><button class="icon-btn" data-edit-course="${c.id}">✎</button><button class="icon-btn delete" data-delete-course="${c.id}">×</button></div></td></tr>`).join(''):`<tr><td colspan="6"><div class="empty">還沒有課程</div></td></tr>`}</tbody></table></div></div>`;return}state.calendarDate=state.calendarDate||new Date();el.innerHTML=state.courseMode==='month'?monthCalendar():weekCalendar()}
+    function renderMonthStudentFilter(){
+      const filter=$('#calendarStudentFilter');
+      filter.hidden=state.courseMode!=='month';
+      if(filter.hidden)return;
+      const names=new Map(data.students.map(student=>[student.id,student.name]));
+      for(const course of data.courses){
+        if(course.studentId&&course.studentNameSnapshot&&!names.has(course.studentId)){
+          names.set(course.studentId,course.studentNameSnapshot);
+        }
+      }
+      if(!names.has(state.monthStudentId))state.monthStudentId='';
+      const options=[...names].sort((a,b)=>a[1].localeCompare(b[1],'zh-TW'));
+      const select=$('#monthStudent');
+      select.replaceChildren(new Option('全部學生',''),...options.map(([id,name])=>new Option(name,id)));
+      select.value=state.monthStudentId;
+    }
+    function renderCourses(){materializeRecurrences();renderMonthStudentFilter();const el=$('#courseContent');if(state.courseMode==='list'){const sorted=[...data.courses].sort((a,b)=>(a.date+a.start).localeCompare(b.date+b.start));el.innerHTML=`<div class="card"><div class="section-head"><div><h2>所有課程</h2><p>共 ${sorted.length} 堂課程</p></div></div><div class="table-wrap"><table class="data-table"><thead><tr><th>日期時間</th><th>學生與課程</th><th>時數</th><th>狀態</th><th>應收</th><th></th></tr></thead><tbody>${sorted.length?sorted.map(c=>`<tr><td>${fmtDate(c.date)}<br><small style="color:var(--muted)">${c.start}–${c.end}</small></td><td><strong>${esc(student(c.studentId).name)}</strong><br><small style="color:var(--muted)">${esc(c.title||student(c.studentId).subject)}</small></td><td>${courseHours(c).toFixed(1)} 小時</td><td>${badge(c.status)}</td><td>${isBillable(c)?fmtMoney(courseAmount(c)):'—'}</td><td><div class="actions"><button class="icon-btn" data-edit-course="${c.id}">✎</button><button class="icon-btn delete" data-delete-course="${c.id}">×</button></div></td></tr>`).join(''):`<tr><td colspan="6"><div class="empty">還沒有課程</div></td></tr>`}</tbody></table></div></div>`;return}state.calendarDate=state.calendarDate||new Date();el.innerHTML=state.courseMode==='month'?monthCalendar():weekCalendar()}
     function calendarEvents(date){return data.courses.filter(c=>c.date===date).sort((a,b)=>a.start.localeCompare(b.start))}
     function eventHtml(c){return `<div class="calendar-event ${statusMap[c.status]?.[1]||''} ${state.justMovedId===c.id?'move-pulse':''}" data-edit-course="${c.id}" title="${esc(student(c.studentId).name+' '+(c.title||''))}">${esc(student(c.studentId).name)}</div>`}
     function noteForCourse(courseId){const c=data.courses.find(x=>x.id===courseId);return data.notes.find(n=>n.courseId===courseId)|| (c?data.notes.find(n=>!n.courseId&&n.studentId===c.studentId&&n.date===c.date):null)}
 function financeDateHtml(c){const d=parseDate(c.date);return `<div class="finance-date-wrap"><div class="finance-date-box"><b>${d.getDate()}</b><small>${d.getMonth()+1}月</small></div><em class="finance-time">${c.start}–${c.end}</em></div>`}
     function calendarPeriodControls(d){return `<div class="calendar-period-wrap"><button type="button" class="calendar-period-control" data-calendar-period="year">${d.getFullYear()} 年</button><button type="button" class="calendar-period-control" data-calendar-period="month">${d.getMonth()+1} 月</button><div class="calendar-period-popover" data-calendar-period-popover></div></div>`}
-    function monthCalendar(){const d=state.calendarDate,y=d.getFullYear(),m=d.getMonth(),first=new Date(y,m,1),start=new Date(y,m,1-first.getDay()),cells=[];for(let i=0;i<42;i++){const cd=new Date(start);cd.setDate(start.getDate()+i);const iso=localDate(cd),inMonth=cd.getMonth()===m,cls=(inMonth?'':' muted')+(iso===todayISO()?' today':'');cells.push(`<div class="calendar-day${cls}" data-drop-date="${iso}"><span class="day-number">${cd.getDate()}</span>${calendarEvents(iso).map(eventHtml).join('')}</div>`)}return `<div class="card calendar-card"><div class="calendar-head"><div><div>${calendarPeriodControls(d)}</div><p style="margin:3px 0 0;color:var(--muted);font-size:12px">長按空白日期新增，拖曳可移動，點擊課程查看詳情</p></div><div class="calendar-nav"><button data-calendar="prev">‹</button><button data-calendar="next">›</button></div></div><div class="calendar-grid"><div class="week-day">日</div><div class="week-day">一</div><div class="week-day">二</div><div class="week-day">三</div><div class="week-day">四</div><div class="week-day">五</div><div class="week-day">六</div>${cells.join('')}</div></div>`}
-    function calendarEventsSummary(date){const events=calendarEvents(date),visible=events.length>2?events.slice(0,1):events;return `${visible.map(eventHtml).join('')}${events.length>2?`<div class="calendar-more">＋${events.length-1} 堂</div>`:''}`}
+    function calendarEventsSummary(date){const events=calendarEvents(date).filter(course=>!state.monthStudentId||course.studentId===state.monthStudentId),visible=events.length>2?events.slice(0,1):events;return `${visible.map(eventHtml).join('')}${events.length>2?`<div class="calendar-more">＋${events.length-1} 堂</div>`:''}`}
     function monthCalendar(){const d=state.calendarDate,y=d.getFullYear(),m=d.getMonth(),first=new Date(y,m,1),start=new Date(y,m,1-first.getDay()),cells=[];for(let i=0;i<42;i++){const cd=new Date(start);cd.setDate(start.getDate()+i);const iso=localDate(cd),inMonth=cd.getMonth()===m,cls=(inMonth?'':' muted')+(iso===todayISO()?' today':'');cells.push(`<div class="calendar-day${cls}" data-drop-date="${iso}" data-calendar-day="${iso}"><span class="day-number">${cd.getDate()}</span>${calendarEventsSummary(iso)}</div>`)}return `<div class="card calendar-card"><div class="calendar-head"><div><div>${calendarPeriodControls(d)}</div><p style="margin:3px 0 0;color:var(--muted);font-size:12px">點擊日期查看當日明細，長按空白日期新增，拖曳可移動</p></div><div class="calendar-nav"><button data-calendar="prev">‹</button><button data-calendar="next">›</button></div></div><div class="calendar-grid"><div class="week-day">日</div><div class="week-day">一</div><div class="week-day">二</div><div class="week-day">三</div><div class="week-day">四</div><div class="week-day">五</div><div class="week-day">六</div>${cells.join('')}</div></div>`}
     function weekCalendar(){const d=state.calendarDate,day=d.getDay(),start=new Date(d);start.setDate(d.getDate()-day);const days=[...Array(7)].map((_,i)=>{const x=new Date(start);x.setDate(start.getDate()+i);return x}),weekNames=['日','一','二','三','四','五','六'];const selectedIso=days.some(x=>localDate(x)===state.weekSelectedDate)?state.weekSelectedDate:localDate(d);state.weekSelectedDate=selectedIso;const selectedDate=parseDate(selectedIso),selectedEvents=calendarEvents(selectedIso);const overview=days.map(x=>{const iso=localDate(x),events=calendarEvents(iso),visible=events.slice(0,4);return `<button type="button" class="week-day-card ${iso===selectedIso?'selected':''} ${iso===todayISO()?'today':''}" data-week-day="${iso}" data-drop-date="${iso}"><span class="week-day-card-head"><span class="week-day-name">週${weekNames[x.getDay()]}</span><strong>${x.getDate()}</strong></span><span class="week-card-summary">${visible.length?visible.map(c=>`<span class="week-card-item"><b>${c.start}</b><span>${esc(student(c.studentId).name)}</span></span>`).join(''):'<span class="week-card-empty">沒有排課</span>'}${events.length>4?`<span class="week-card-more">＋${events.length-4} 堂</span>`:''}</span></button>`}).join('');const detail=`<section class="week-day-detail week-detail-full" data-drop-date="${selectedIso}"><div class="week-detail-head"><div><h3>週${weekNames[selectedDate.getDay()]} ${selectedDate.getMonth()+1}/${selectedDate.getDate()} 行程</h3><p>${selectedEvents.length?`依開始時間排列，共 ${selectedEvents.length} 堂`:'今天沒有排課，可長按此區新增課程'}</p></div><span class="badge ${selectedIso===todayISO()?'completed':'scheduled'}">${selectedIso===todayISO()?'今天':'單日明細'}</span></div><div class="week-detail-list">${selectedEvents.length?selectedEvents.map(c=>`<div class="week-event week-detail-event ${statusMap[c.status]?.[1]||''} ${state.justMovedId===c.id?'move-pulse':''}" data-edit-course="${c.id}" data-drop-date="${selectedIso}" data-drop-hour="${Number(c.start.split(':')[0])}"><div class="week-detail-time">${c.start}<small>${c.end}</small></div><div class="week-detail-main"><strong>${esc(student(c.studentId).name)}</strong><button type="button" class="course-note-button" data-course-note="${c.id}">${noteForCourse(c.id)?'檢視／修改紀錄':'填寫教學紀錄'}</button><span>${esc(c.title||student(c.studentId).subject||'課程')}</span></div><div class="week-detail-meta">${badge(c.status)}<small>${isBillable(c)?fmtMoney(courseAmount(c)):'不計收入'}</small></div></div>`).join(''):'<div class="week-detail-empty">尚未安排課程</div>'}</div></section>`;const prevLabel=state.weekDetailOpen?'前一天':'前一週',nextLabel=state.weekDetailOpen?'後一天':'後一週';const header=`<div class="calendar-head"><div><div>${calendarPeriodControls(d)}</div><p style="margin:3px 0 0;color:var(--muted);font-size:12px">${state.weekDetailOpen?'單日行程｜依時間排序，點擊課程查看詳情':'日到六七日總覽｜點擊日期進入單日行程，長按空白區新增'}</p></div><div class="calendar-nav">${state.weekDetailOpen?'<button class="btn btn-secondary btn-sm" data-week-back>返回七日總覽</button>':''}<button data-calendar="prev" aria-label="${prevLabel}" title="${prevLabel}">‹</button><button data-calendar="next" aria-label="${nextLabel}" title="${nextLabel}">›</button></div></div>`;return `<div class="card calendar-card">${header}${state.weekDetailOpen?detail:`<div class="week-overview" aria-label="週日到週六課程總覽">${overview}</div>`}</div>`}
     function renderNotes(){const q=($('#noteSearch')?.value||'').toLowerCase().trim(), rows=data.notes.filter(n=>{const s=student(n.studentId);return `${s.name} ${n.content} ${n.performance} ${n.weakness}`.toLowerCase().includes(q)}).sort((a,b)=>b.date.localeCompare(a.date));$('#notesList').innerHTML=rows.length?rows.map(n=>{const s=student(n.studentId);return `<article class="note-card"><h3>${esc(s.name)} · ${fmtDate(n.date)}</h3><p><strong>本堂內容：</strong>${esc(n.content)}</p><p><strong>學生表現：</strong>${esc(n.performance)}</p><p><strong>待加強：</strong>${esc(n.weakness)}</p><p><strong>作業：</strong>${esc(n.homework)}</p><p><strong>下次計畫：</strong>${esc(n.nextPlan)}</p><div class="note-meta"><button class="link-btn" data-view-note="${n.id}">檢視紀錄</button>　<button class="link-btn" style="color:var(--rose-dark)" data-delete-note="${n.id}">刪除</button></div></article>`}).join(''):`<div class="empty" style="grid-column:1/-1"><div class="empty-icon">✎</div>${q?'找不到相關紀錄':'還沒有教學紀錄，記下第一堂課吧'}</div>`}

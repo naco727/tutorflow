@@ -14,3 +14,6 @@ window.TUTORFLOW_LIFF_ID = '2012741223-NOSRPMAp';
 
 // Public timetable for the existing ?mode=public URL. The Worker uses its own TEACHER_UID binding.
 window.TUTORFLOW_PUBLIC_TEACHER_UID = 'Gt8LnIg2RHNLIdVIYGiI5YomyWK2';
+
+// HTTPS origin of the dedicated account-admin Worker. Its credentials are Worker secrets.
+window.TUTORFLOW_ACCOUNT_ADMIN_URL = '';
