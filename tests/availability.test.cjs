@@ -1,5 +1,6 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const vm = require('node:vm');
 const {documentPath, mergeSlots, viewSlots} = require('../tutorflow-availability.js');
 const {prepare, verify} = require('../scripts/availability-migration.cjs');
@@ -35,6 +36,70 @@ test('sync changes openings and preserves booked rows, metadata and empty-doc be
   assert.deepEqual(viewSlots({slots: after}), [replacement]);
   assert.deepEqual(mergeSlots(prior, []), [booked]);
   assert.throws(() => mergeSlots({slots: {}}, [available]), {code: 'failed-precondition'});
+});
+
+test('teacher minimum is saved, applied to full slots, and passed to Firestore sync', async () => {
+  const page = fs.readFileSync('index.html', 'utf8');
+  const part = page.slice(page.indexOf('    const PUBLIC_AVAILABILITY_COLLECTION'), page.indexOf('    function renderPublicModeSlots'));
+  const date = '2099-01-05';
+  const parseDate = value => new Date(value + 'T00:00:00');
+  const weekday = parseDate(date).getDay();
+  const minimumInput = {value: '', reportValidity: () => true};
+  let savedConfig, uploaded;
+  const controls = {
+    '#availabilityMinimumHours': minimumInput,
+    '#availabilityHorizon': {value: '2'},
+    '[data-availability-action="sync"]': {disabled: false},
+    [`[data-availability-day="${weekday}"]`]: {querySelector: selector => ({
+      '[data-availability-enabled]': {checked: true},
+      '[data-availability-start]': {value: '09:00'},
+      '[data-availability-end]': {value: '16:00'}
+    })[selector]}
+  };
+  const data = {
+    settings: {availability: {durationMinutes: 90}},
+    courses: [['09:30', '10:00'], ['10:31', '11:00'], ['12:30', '13:30']]
+      .map(([start, end]) => ({date, start, end, status: 'scheduled'})),
+    bookings: []
+  };
+  const db = {};
+  const context = vm.createContext({
+    data, $: selector => controls[selector], parseDate,
+    availabilityDayNames: ['日', '一', '二', '三', '四', '五', '六'],
+    todayISO: () => '2099-01-04', addDays: (_, offset) => offset ? date : '2099-01-04',
+    dateTime: (day, time) => Date.parse(day + 'T' + time),
+    save: () => { savedConfig = JSON.parse(JSON.stringify(data.settings.availability)); },
+    toast: () => {}, flushWorkspace: async () => true,
+    FIREBASE_CONFIG: {projectId: 'demo-tutorflow'},
+    cloudSession: {user: {uid: 'teacher-a'}, db},
+    window: {firebase: {apps: [{name: '[DEFAULT]'}], auth: () => ({currentUser: {uid: 'teacher-a'}})}},
+    FIREBASE_SDK_URLS: [], loopback: false,
+    TutorFlowAvailability: {sync: async (actualDb, uid, slots) => {
+      assert.equal(actualDb, db);
+      assert.equal(uid, 'teacher-a');
+      uploaded = JSON.parse(JSON.stringify(slots));
+      return {writtenCount: slots.length};
+    }}
+  });
+  vm.runInContext(part, context);
+  const times = slots => slots.map(({start, end}) => [start, end]);
+  await vm.runInContext('syncAvailability()', context);
+  assert.equal(savedConfig.minimumMinutes, 31);
+  assert.deepEqual(times(uploaded), [['10:00', '10:31'], ['11:00', '12:30'], ['13:30', '16:00']]);
+
+  minimumInput.value = '1.5';
+  minimumInput.valueAsNumber = 1.5;
+  await vm.runInContext('syncAvailability()', context);
+  assert.equal(savedConfig.minimumMinutes, 90);
+  assert.equal(vm.runInContext('getAvailabilityConfig().minimumMinutes', context), 90);
+  assert.deepEqual(times(uploaded), [['11:00', '12:30'], ['13:30', '16:00']]);
+  assert.deepEqual(uploaded, savedConfig.publicSlots);
+
+  minimumInput.value = '3';
+  minimumInput.valueAsNumber = 3;
+  await vm.runInContext('syncAvailability()', context);
+  assert.deepEqual(uploaded, []);
+  assert.equal(controls['[data-availability-action="sync"]'].disabled, false);
 });
 
 test('Worker uses only trusted UID, reads one document and keeps the original filters', async () => {
