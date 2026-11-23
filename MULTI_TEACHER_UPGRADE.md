@@ -44,7 +44,7 @@
 
 1. 舊版在每個有真實資料的瀏覽器先使用「匯出 JSON」。確認檔案可讀，留存學生、課程、教學紀錄、已收款堂數及空堂設定的基準。確認資料所在的瀏覽器來源與正式網址。
 2. 由有權限的 Firebase 擁有人以 Cloud Firestore 匯出保存正式資料，涵蓋 `publicAvailability` 及 Worker 依賴的集合。保留文件 ID、欄位型別與原作業規則，先在隔離的環境核對還原流程。保存正式部署的 Git SHA、現行 Firebase Auth Provider 設定和 LINE 設定。Firestore 管理匯出存取權及計費參見 [匯出與匯入資料](https://firebase.google.com/docs/firestore/manage-data/export-import)。
-3. 在 Firebase Console 啟用 Authentication 的「電子郵件／密碼」並確認授權網域含 `naco727.github.io`。在 Authentication 的郵件範本確認信箱驗證和重設密碼使用可用的 Firebase 動作頁。參見 [Firebase 密碼登入](https://firebase.google.com/docs/auth/web/password-auth)。
+3. 在 Firebase Console 啟用 Authentication 的「電子郵件／密碼」並確認授權網域含 `naco727.github.io`。在 Authentication 的郵件範本確認信箱驗證使用可用的 Firebase 動作頁。參見 [Firebase 密碼登入](https://firebase.google.com/docs/auth/web/password-auth)。
 4. 使用既有管理員的信箱設定密碼並完成登入，核對原 UID 及 `memberships/{uid}` 的 `role: "admin"`、`status: "active"`。若原帳號只有手機號碼，請由 Firebase 專案管理者先將信箱加到同一個 Auth UID，再用該信箱設定密碼並驗證。參見 [Firebase Admin 使用者管理](https://firebase.google.com/docs/auth/admin/manage-users#update_a_user)。
 5. 完成測試、取得批准後，先對照正式 Firestore Rules，把 `firestore.rules` 合併與核對後再發布至正式 `(default)`。依原設定保留相關已部署索引，另外將 `chunks.payload` 設為不索引。待正式 Rules、索引及角色確認後，才合併分支並由 GitHub Pages 從已驗證的分支部署。正式讀取或寫入需驗證 [Firebase 官方規則部署步驟](https://firebase.google.com/docs/firestore/security/get-started)。
 6. 先將正式 Worker 切換至下方的老師文件並驗收「詢問時段」。接著發布新版 Firestore Rules，核對舊根集合已無法從客戶端讀取，最後在完成備份並確認刪除後，從 Firebase Console 移除根集合 `publicAvailability`。
@@ -55,7 +55,7 @@
 
 1. 輸入電子郵件和密碼後選「申請帳號」。Firebase 會拒絕重複註冊。新帳號點開驗證信後，回到 TutorFlow 按「重新檢查」，等待管理員核准。
 2. 選「登入」時由 Firebase 檢查帳號密碼。在信箱列舉保護開啟時，未知帳號和密碼錯誤會顯示同一則提示。參見 [Firebase 信箱列舉保護](https://docs.cloud.google.com/identity-platform/docs/admin/email-enumeration-protection)。
-3. 曾使用連結登入的帳號，輸入原信箱並選「設定或重設密碼」。設定後以同一信箱登入，原 Firebase UID 和會員角色繼續沿用。
+3. 若既有帳號尚未設定密碼，可由 Firebase 專案管理者協助原帳號設定。以同一信箱登入後，原 Firebase UID 和會員角色繼續沿用。
 
 ## LINE Bot 及公開空堂切換
 

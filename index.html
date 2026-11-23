@@ -120,7 +120,6 @@
           <div class="form-actions">
             <button type="submit" class="btn btn-primary" value="login">登入</button>
             <button type="submit" class="btn btn-secondary" value="register">申請帳號</button>
-            <button type="button" class="btn btn-ghost" id="resetPasswordButton">設定或重設密碼</button>
           </div>
         </form>
         <div class="auth-message" id="authMessage"></div>
@@ -324,12 +323,12 @@
     async function renderPublicMode(){document.body.className='public-mode';document.body.innerHTML='<main class="public-page"><div class="public-brand"><img src="./tutorflow-icon.jpg" alt="TutorFlow"/><div><h1>TutorFlow 空堂查詢</h1><p>查看老師可預約的家教時段</p></div></div><section class="card"><div class="section-head"><div><h2>可預約時段</h2><p id="publicLiffStatus">正在初始化公開頁面…</p></div></div><div id="publicSlotList" class="public-slot-list"><div class="availability-empty">正在讀取最新空堂…</div></div><div class="public-safe-note">資料只來自 Firestore publicAvailability；此頁面不顯示學生、課程紀錄、收費或聯絡資料。</div></section></main>';await initPublicLiff();if(!FIREBASE_CONFIG?.projectId){renderPublicModeMessage('目前無法讀取最新空堂：尚未設定 Firebase 專案。','warning');return}try{const slots=await readPublicAvailabilityFromFirestore();renderPublicModeSlots(slots)}catch(error){console.error('[TutorFlow] 公開空堂讀取失敗',{code:String(error?.code||'unknown'),message:String(error?.message||'未提供錯誤訊息'),projectId:String(FIREBASE_CONFIG.projectId),collection:PUBLIC_AVAILABILITY_COLLECTION});renderPublicModeMessage('目前無法讀取最新空堂，請稍後再試。','warning')}}
     function authErrorText(error){
       const messages={
-        'auth/email-already-in-use':'這個信箱已有帳號，請登入或設定／重設密碼。',
+        'auth/email-already-in-use':'這個信箱已有帳號，請直接登入。',
         'auth/invalid-email':'請輸入有效的電子郵件。',
-        'auth/invalid-credential':'信箱或密碼不正確。新使用者可申請帳號，舊帳號可重設密碼。',
-        'auth/invalid-login-credentials':'信箱或密碼不正確。新使用者可申請帳號，舊帳號可重設密碼。',
+        'auth/invalid-credential':'信箱或密碼不正確，請確認後再試。',
+        'auth/invalid-login-credentials':'信箱或密碼不正確，請確認後再試。',
         'auth/user-not-found':'找不到帳號，請確認信箱或先申請帳號。',
-        'auth/wrong-password':'密碼不正確，可使用重設密碼。',
+        'auth/wrong-password':'密碼不正確，請確認後再試。',
         'auth/weak-password':'密碼至少需要 6 個字元，並須符合 Firebase 密碼規則。',
         'auth/password-does-not-meet-requirements':'密碼未達 Firebase 密碼要求，請使用更長且包含不同類型字元的密碼。',
         'auth/operation-not-allowed':'Firebase 尚未啟用電子郵件／密碼登入。',
@@ -371,8 +370,7 @@
 
     async function runEmailAuth(action){
       const form=$('#emailAuthForm'), address=$('#loginEmail'), secret=$('#loginPassword');
-      if(emailAuthBusy||!address.reportValidity())return;
-      if(action!=='reset'&&!secret.reportValidity())return;
+      if(emailAuthBusy||!address.reportValidity()||!secret.reportValidity())return;
       const email=address.value.trim(), password=secret.value;
       if(action==='register'&&password.length<6){
         setAuthMessage('申請帳號時，密碼至少需要 6 個字元。');
@@ -383,17 +381,12 @@
       const buttons=form.querySelectorAll('button');
       buttons.forEach(button=>{button.disabled=true});
       form.setAttribute('aria-busy','true');
-      const working={register:'正在申請帳號…',login:'正在登入…',reset:'正在寄送密碼設定信…'};
-      setAuthMessage(working[action],true);
+      setAuthMessage(action==='register'?'正在申請帳號…':'正在登入…',true);
       try{
         const auth=await firebaseAuth();
         if(action==='register'){
           const {user}=await auth.createUserWithEmailAndPassword(email,password);
           await sendAccountVerification(user);
-        }else if(action==='reset'){
-          try{await auth.sendPasswordResetEmail(email,authMailSettings())}
-          catch(error){if(error.code!=='auth/user-not-found')throw error}
-          setAuthMessage('若此信箱已有帳號，密碼設定信會寄到該信箱。',true);
         }else{
           await auth.signInWithEmailAndPassword(email,password);
         }
@@ -401,7 +394,7 @@
         setAuthMessage(authErrorText(error));
       }finally{
         emailAuthBusy=false;
-        if(action!=='reset')secret.value='';
+        secret.value='';
         buttons.forEach(button=>{button.disabled=false});
         form.removeAttribute('aria-busy');
       }
@@ -411,7 +404,6 @@
         event.preventDefault();
         runEmailAuth(event.submitter?.value==='register'?'register':'login');
       };
-      $('#resetPasswordButton').onclick=()=>runEmailAuth('reset');
       for(const id of ['#logoutBtn','#leaveCloudAccount','#logoutCloudSettings']){
         $(id).onclick=async()=>{
           if(cloudSession?.pending&&!retainDraft(cloudSession)){
