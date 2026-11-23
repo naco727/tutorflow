@@ -1,5 +1,7 @@
 # TutorFlow LINE LIFF 公開空堂設定
 
+此檔保留原有 LIFF 設定以供相容查閱。多老師升級的正式空堂查詢由 LINE Bot 直接讀取 Firestore。
+
 ## LIFF ID 設定位置
 
 LIFF ID 放在：

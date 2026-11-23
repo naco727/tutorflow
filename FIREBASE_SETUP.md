@@ -1,5 +1,7 @@
 # TutorFlow Firebase Phone Auth 設定
 
+此檔記錄原版單老師部署。多老師分支請參考 [多老師雲端升級](MULTI_TEACHER_UPGRADE.md)。
+
 本分支保留 TutorFlow 原本的 `localStorage` JSON 作為主要資料來源，Firebase 只負責老師登入，以及公開空堂的 `publicAvailability` 集合。學生、聯絡方式、課程紀錄、費率與付款資料不會上傳 Firestore。
 
 空堂不再使用 90 分鐘或其他固定時長切段。老師只需設定每週有空的起訖時間，系統會扣除既有課程與已經過去的時間，直接產生可預約區間；剩餘 30 分鐘或更短的區間不會公開或上傳；重新同步時也會刪除 Firestore 中已不再存在的舊空堂。

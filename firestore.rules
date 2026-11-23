@@ -1,0 +1,121 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function supportedSession() {
+      return request.auth != null
+        && request.auth.token.firebase.sign_in_provider in ['phone', 'password'];
+    }
+
+    function membership(uid) {
+      return get(/databases/$(database)/documents/memberships/$(uid)).data;
+    }
+
+    function legacyTestUid() {
+      return 'a8HEV8D9IkdAVxu2z3KssWCk0oc2';
+    }
+
+    function activeMember() {
+      return supportedSession() && request.auth.uid != legacyTestUid()
+        && (request.auth.token.firebase.sign_in_provider == 'phone'
+          || request.auth.token.email_verified == true)
+        && membership(request.auth.uid).status == 'active'
+        && membership(request.auth.uid).role in ['teacher', 'admin'];
+    }
+
+    function admin() {
+      return activeMember() && membership(request.auth.uid).role == 'admin';
+    }
+
+    function owns(uid) {
+      return supportedSession() && request.auth.uid == uid && activeMember();
+    }
+
+    function registrationsOpen() {
+      let path = /databases/$(database)/documents/systemSettings/main;
+      return !exists(path) || get(path).data.signupOpen == true;
+    }
+
+    match /systemSettings/main {
+      allow get: if admin();
+      allow create, update: if admin() && request.resource.data.keys().hasOnly(['signupOpen'])
+        && request.resource.data.signupOpen is bool;
+    }
+
+    match /memberships/{uid} {
+      allow get: if supportedSession() && (request.auth.uid == uid || admin());
+      allow list: if admin();
+      allow create: if supportedSession() && request.auth.uid == uid && uid != legacyTestUid() && registrationsOpen()
+        && request.resource.data.keys().hasOnly(['role', 'status'])
+        && request.resource.data.role == 'teacher' && request.resource.data.status == 'pending';
+      // Admin can approve or disable teachers. Admin grants and protected flags are console-only.
+      allow update: if admin() && uid != legacyTestUid() && resource.data.role == 'teacher'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
+        && request.resource.data.status in ['active', 'disabled'];
+    }
+
+    function validHead() {
+      let next = request.resource.data;
+      return next.keys().hasOnly(['version', 'revision', 'chunkCount', 'migrated', 'mutationId'])
+        && next.version == 1 && next.revision is int
+        && next.chunkCount is int && next.chunkCount >= 1 && next.chunkCount <= 32
+        && next.migrated is bool
+        && next.mutationId is string && next.mutationId.size() > 0 && next.mutationId.size() <= 100;
+    }
+
+    function advancesHead(uid) {
+      let path = /databases/$(database)/documents/teachers/$(uid)/workspace/head;
+      return existsAfter(path) && (!exists(path) || getAfter(path).data.revision > get(path).data.revision);
+    }
+
+    match /teachers/{uid}/workspace/head {
+      allow get: if owns(uid);
+      allow create: if owns(uid) && validHead() && request.resource.data.revision == 1;
+      allow update: if owns(uid) && validHead()
+        && request.resource.data.revision == resource.data.revision + 1
+        && request.resource.data.migrated == resource.data.migrated;
+
+      match /chunks/{chunkId} {
+        allow read: if owns(uid);
+        allow create, update: if owns(uid) && advancesHead(uid)
+          && chunkId.matches('([0-9]|[12][0-9]|3[01])')
+          && request.resource.data.keys().hasOnly(['payload'])
+          && request.resource.data.payload is string
+          && request.resource.data.payload.size() <= 160000;
+        allow delete: if owns(uid) && advancesHead(uid);
+      }
+    }
+
+    match /legacyLineBridge/config {
+      allow get: if admin();
+    }
+
+    function legacyCutoverComplete() {
+      let path = /databases/$(database)/documents/legacyLineBridge/config;
+      return exists(path) && get(path).data.get('cutoverComplete', false) == true;
+    }
+
+    function previousLineWriter() {
+      return supportedSession() && request.auth.uid == legacyTestUid() && !legacyCutoverComplete();
+    }
+
+    match /teachers/{uid}/public/publicAvailability {
+      allow get: if true;
+      allow create, update: if owns(uid)
+        && request.resource.data.keys().hasOnly(['slots'])
+        && request.resource.data.slots is list
+        && request.resource.data.slots.size() <= 8640;
+    }
+
+    function validSlot(slot) {
+      return slot.keys().hasOnly(['date', 'start', 'end', 'status'])
+        && slot.date is string && slot.start is string && slot.end is string && slot.status == 'available';
+    }
+
+    match /publicAvailability/{slotId} {
+      allow read: if true;
+      allow create, update: if previousLineWriter() && validSlot(request.resource.data);
+      allow delete: if previousLineWriter();
+    }
+  }
+}
