@@ -34,6 +34,7 @@ function mountCloudControls() {
       </div>
       <button type="button" class="btn btn-ghost btn-sm" id="toggleSignup" hidden></button>
       <p class="form-hint" id="teacherAdminSetup" hidden></p>
+      <p class="form-hint" id="teacherAdminEmailStatus" role="status" hidden></p>
       <div id="teacherAdminRows"></div>
     </section>`);
   $('#availabilityPreview').insertAdjacentHTML('beforebegin', '<p class="form-hint" id="availabilitySyncScope"></p>');
@@ -283,7 +284,7 @@ async function observeCloudAccount(user) {
     if (generation !== accountGeneration) return;
     const ref = db.collection('memberships').doc(user.uid);
     const email = typeof token.claims.email === 'string' ? token.claims.email : '';
-    let emailSyncStarted = false;
+    let emailSync = null;
     let requesting = false, opening = false, latestMembership = null;
     membershipWatch = ref.onSnapshot({includeMetadataChanges: true}, async snapshot => {
       if (generation !== accountGeneration || snapshot.metadata.fromCache || snapshot.metadata.hasPendingWrites) return;
@@ -309,11 +310,11 @@ async function observeCloudAccount(user) {
       }
       const membership = snapshot.data();
       latestMembership = membership;
-      if (email && membership.email !== email && !emailSyncStarted &&
+      if (email && membership.email !== email && !emailSync &&
           ['pending', 'active', 'disabled'].includes(membership.status)) {
-        emailSyncStarted = true;
-        ref.update({email}).catch(error => {
+        emailSync = ref.update({email}).then(() => null, error => {
           console.warn('TutorFlow membership email sync failed', error.code);
+          return error.code || 'unknown';
         });
       }
       const active = membership.status === 'active' && ['admin', 'teacher'].includes(membership.role);
@@ -334,7 +335,8 @@ async function observeCloudAccount(user) {
         if (generation !== accountGeneration || latestMembership?.status !== 'active') return;
         const workspace = base.revision ? cloud.validateWorkspace(JSON.parse(base.text)).workspace : cloud.empty();
         const session = {
-          db, user, membership: latestMembership, store, base, remoteRevision: base.revision, pending: null, conflict: false,
+          db, user, membership: latestMembership, verifiedEmail: email || user.email, emailSync,
+          store, base, remoteRevision: base.revision, pending: null, conflict: false,
           draftKey: draftPrefix(user.uid) + uid('draft')
         };
         cloudSession = session;
@@ -406,8 +408,16 @@ async function showTeacherAdmin() {
   const output = $('#teacherAdminRows');
   const adminOrigin = teacherAdminOrigin();
   const setup = $('#teacherAdminSetup');
-  setup.hidden = Boolean(adminOrigin);
-  setup.textContent = '舊帳號會在下次登入後補上已驗證信箱。刪除會員紀錄請使用 Firebase Console。';
+  const emailStatus = $('#teacherAdminEmailStatus');
+  setup.hidden = true;
+  emailStatus.hidden = true;
+  session.emailSync?.then(code => {
+    if (!code || session !== cloudSession) return;
+    emailStatus.textContent = code === 'permission-denied'
+      ? '無法將你的信箱存入會員資料（permission-denied）。請確認 turtorflow 預設資料庫已發布新版 Firestore 規則。'
+      : `無法將你的信箱存入會員資料（${code}）。請重新登入後再試。`;
+    emailStatus.hidden = false;
+  });
   output.textContent = '正在讀取帳號…';
   try {
     const signupRef = session.db.collection('systemSettings').doc('main');
@@ -434,13 +444,17 @@ async function showTeacherAdmin() {
     };
     output.replaceChildren();
     if (snapshot.empty) output.textContent = '目前沒有老師帳號。';
+    let missingEmailCount = 0;
     for (const doc of snapshot.docs) {
       const membership = doc.data();
       const row = document.createElement('div');
       row.className = 'data-action';
       const label = document.createElement('span');
       const statuses = {pending: '待核准', active: '使用中', disabled: '已停用', deleting: '刪除處理中'};
-      const email = emails ? emails.get(doc.id) : membership.email;
+      const email = doc.id === session.user.uid
+        ? session.verifiedEmail || membership.email
+        : emails ? emails.get(doc.id) : membership.email;
+      if (!email) missingEmailCount++;
       const identity = email || `尚無已驗證信箱（${doc.id}）`;
       label.textContent = `${identity} · ${statuses[membership.status] || '未知狀態'}`;
       row.append(label);
@@ -472,6 +486,13 @@ async function showTeacherAdmin() {
       }
       output.append(row);
     }
+    const notices = [];
+    if (missingEmailCount) {
+      notices.push(`還有 ${missingEmailCount} 筆會員沒有信箱。請該帳號完成信箱驗證並登入新版 TutorFlow，再重新載入老師名單。`);
+    }
+    if (!adminOrigin) notices.push('刪除會員紀錄請使用 Firebase Console。');
+    setup.textContent = notices.join(' ');
+    setup.hidden = !notices.length;
   } catch (error) {
     if (session === cloudSession) output.textContent = cloudErrorText(error);
   }
