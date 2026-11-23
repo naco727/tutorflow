@@ -46,8 +46,10 @@ test('password registration, verification, reset, approval and two clients shari
     await auth.applyActionCode(verification.oobCode);
     await auth.currentUser.reload();
     assert.equal(auth.currentUser.emailVerified, true);
-    await auth.currentUser.getIdToken(true);
-    await access.set({role: 'teacher', status: 'pending'});
+    const verifiedToken = await auth.currentUser.getIdTokenResult(true);
+    assert.equal(verifiedToken.claims.email, email);
+    await access.set({role: 'teacher', status: 'pending', email: verifiedToken.claims.email});
+    assert.equal((await access.get({source: 'server'})).data().email, email);
     await auth.sendPasswordResetEmail(email);
     const reset = (await emulatorCodes('oobCodes')).oobCodes.find(item => item.email === email && item.requestType === 'PASSWORD_RESET');
     assert.ok(reset);

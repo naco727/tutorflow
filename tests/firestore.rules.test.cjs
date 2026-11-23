@@ -14,7 +14,7 @@ const publicSlot = 'publicAvailability/2099-01-01_0900';
 const slot = {date: '2099-01-01', start: '09:00', end: '10:00', status: 'available'};
 const metadata = (revision = 1, chunkCount = 1) => ({version: 1, revision, chunkCount, migrated: false, mutationId: `action-${revision}`});
 const as = (uid, provider = 'password', verified = true) => fixture.authenticatedContext(uid, {
-  email_verified: verified, firebase: {sign_in_provider: provider}
+  email: `${uid}@example.invalid`, email_verified: verified, firebase: {sign_in_provider: provider}
 }).firestore();
 
 before(async () => {
@@ -77,6 +77,24 @@ test('teachers cannot promote themselves or tamper with approvals, admin can app
   await assertSucceeds(getDoc(doc(teacher, head('pending'))));
   await assertSucceeds(updateDoc(doc(admin, membership('pending')), {status: 'disabled'}));
   await assertFails(getDoc(doc(teacher, head('pending'))));
+});
+
+test('verified membership email is private and can only match the account token', async () => {
+  const uid = 'email-applicant', admin = as('admin'), teacher = as(uid);
+  const path = membership(uid), email = uid + '@example.invalid';
+  const application = {role: 'teacher', status: 'pending'};
+  await assertFails(setDoc(doc(teacher, path), {...application, email: 'someone-else@example.invalid'}));
+  await assertFails(setDoc(doc(as(uid, 'password', false), path), {...application, email}));
+  await assertSucceeds(setDoc(doc(teacher, path), {...application, email}));
+  assert.equal((await assertSucceeds(getDoc(doc(admin, path)))).data().email, email);
+  await assertFails(getDoc(doc(as('teacher-a'), path)));
+  await assertFails(getDoc(doc(fixture.unauthenticatedContext().firestore(), path)));
+  await assertFails(updateDoc(doc(admin, path), {email: 'wrong@example.invalid'}));
+  await assertFails(updateDoc(doc(teacher, path), {email, status: 'active'}));
+  await assertFails(deleteDoc(doc(admin, path)));
+  await assertSucceeds(updateDoc(doc(admin, path), {status: 'active'}));
+  await assertSucceeds(updateDoc(doc(as('teacher-b'), membership('teacher-b')), {email: 'teacher-b@example.invalid'}));
+  await assertSucceeds(updateDoc(doc(admin, membership('admin')), {email: 'admin@example.invalid'}));
 });
 
 test('full 32-chunk migration stays within Firestore Rules call limits', async () => {

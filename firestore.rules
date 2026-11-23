@@ -35,6 +35,11 @@ service cloud.firestore {
       return !exists(path) || get(path).data.signupOpen == true;
     }
 
+    function matchesSignedInEmail() {
+      return request.resource.data.email is string
+        && request.resource.data.email == request.auth.token.email;
+    }
+
     match /systemSettings/main {
       allow get: if admin();
       allow create, update: if admin() && request.resource.data.keys().hasOnly(['signupOpen'])
@@ -46,8 +51,15 @@ service cloud.firestore {
       allow list: if admin();
       allow create: if supportedSession() && request.auth.uid == uid && uid != legacyTestUid() && registrationsOpen()
         && !exists(/databases/$(database)/documents/retiredTeacherAccounts/$(uid))
-        && request.resource.data.keys().hasOnly(['role', 'status'])
-        && request.resource.data.role == 'teacher' && request.resource.data.status == 'pending';
+        && request.resource.data.keys().hasOnly(['role', 'status', 'email'])
+        && request.resource.data.role == 'teacher' && request.resource.data.status == 'pending'
+        && (!('email' in request.resource.data) || matchesSignedInEmail());
+      allow update: if supportedSession() && request.auth.uid == uid && uid != legacyTestUid()
+        && resource.data.role in ['teacher', 'admin']
+        && resource.data.status in ['active', 'pending', 'disabled']
+        && !exists(/databases/$(database)/documents/retiredTeacherAccounts/$(uid))
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['email'])
+        && matchesSignedInEmail();
       // Admin can approve or disable teachers. Admin grants and protected flags are console-only.
       allow update: if admin() && uid != legacyTestUid() && resource.data.role == 'teacher'
         && resource.data.status != 'deleting'

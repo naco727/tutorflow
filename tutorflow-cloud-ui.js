@@ -282,6 +282,8 @@ async function observeCloudAccount(user) {
     const db = await firestoreDb();
     if (generation !== accountGeneration) return;
     const ref = db.collection('memberships').doc(user.uid);
+    const email = typeof token.claims.email === 'string' ? token.claims.email : '';
+    let emailSyncStarted = false;
     let requesting = false, opening = false, latestMembership = null;
     membershipWatch = ref.onSnapshot({includeMetadataChanges: true}, async snapshot => {
       if (generation !== accountGeneration || snapshot.metadata.fromCache || snapshot.metadata.hasPendingWrites) return;
@@ -292,7 +294,11 @@ async function observeCloudAccount(user) {
         requesting = true;
         try {
           await db.runTransaction(async transaction => {
-            if (!(await transaction.get(ref)).exists) transaction.set(ref, {role: 'teacher', status: 'pending'});
+            if (!(await transaction.get(ref)).exists) {
+              const application = {role: 'teacher', status: 'pending'};
+              if (email) application.email = email;
+              transaction.set(ref, application);
+            }
           });
         } catch (error) {
           if (generation === accountGeneration) showCloudGate(cloudErrorText(error), user, true);
@@ -303,6 +309,13 @@ async function observeCloudAccount(user) {
       }
       const membership = snapshot.data();
       latestMembership = membership;
+      if (email && membership.email !== email && !emailSyncStarted &&
+          ['pending', 'active', 'disabled'].includes(membership.status)) {
+        emailSyncStarted = true;
+        ref.update({email}).catch(error => {
+          console.warn('TutorFlow membership email sync failed', error.code);
+        });
+      }
       const active = membership.status === 'active' && ['admin', 'teacher'].includes(membership.role);
       if (cloudSession && (!active || membership.role !== cloudSession.membership.role || membership.legacyImport !== cloudSession.membership.legacyImport)) {
         resetSignedInPage();
@@ -394,7 +407,7 @@ async function showTeacherAdmin() {
   const adminOrigin = teacherAdminOrigin();
   const setup = $('#teacherAdminSetup');
   setup.hidden = Boolean(adminOrigin);
-  setup.textContent = '請先設定帳號管理服務，以顯示信箱及啟用刪除。';
+  setup.textContent = '舊帳號會在下次登入後補上已驗證信箱。刪除會員紀錄請使用 Firebase Console。';
   output.textContent = '正在讀取帳號…';
   try {
     const signupRef = session.db.collection('systemSettings').doc('main');
@@ -403,10 +416,6 @@ async function showTeacherAdmin() {
       adminOrigin ? loadTeacherEmails(session, adminOrigin).catch(() => null) : null
     ]);
     if (session !== cloudSession) return;
-    if (adminOrigin && !emails) {
-      setup.textContent = '暫時無法取得帳號信箱，請重新載入帳號列表。';
-      setup.hidden = false;
-    }
     const toggle = $('#toggleSignup');
     const open = !signup.exists || signup.data().signupOpen === true;
     toggle.hidden = false;
@@ -431,7 +440,8 @@ async function showTeacherAdmin() {
       row.className = 'data-action';
       const label = document.createElement('span');
       const statuses = {pending: '待核准', active: '使用中', disabled: '已停用', deleting: '刪除處理中'};
-      const identity = emails?.get(doc.id) || `無可用信箱（${doc.id}）`;
+      const email = emails ? emails.get(doc.id) : membership.email;
+      const identity = email || `尚無已驗證信箱（${doc.id}）`;
       label.textContent = `${identity} · ${statuses[membership.status] || '未知狀態'}`;
       row.append(label);
       if (membership.role === 'teacher' && doc.id !== session.user.uid && membership.status !== 'deleting') {

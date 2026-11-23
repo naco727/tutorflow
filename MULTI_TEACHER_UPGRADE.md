@@ -68,7 +68,11 @@
 
 ## 啟用老師帳號管理服務
 
-「資料管理 → 老師管理」會顯示 Firebase Auth 已驗證的信箱。管理員確認刪除後，服務會鎖定指定老師，再刪除 Firebase Auth 帳號、會員資料、工作區分塊和公開空堂。工作區包含學生、課程、教學紀錄、收費與設定。瀏覽器裡的草稿及離線 JSON 備份仍留在原裝置。Firestore 只保留無信箱內容的 UID 停用標記，避免舊登入狀態重新建立會員資料。
+「資料管理 → 老師管理」可直接讀取 `memberships/{uid}.email`。老師驗證信箱並登入後，TutorFlow 從 Firebase ID Token 取得信箱並寫入自己的會員紀錄。新申請會帶入信箱，既有會員會在下次登入時補寫。Firestore 規則會核對已驗證的登入信箱，只有管理員可讀取完整名單。先發布本版 Firestore 規則，再部署網站。
+
+已在 Firebase Authentication 刪除的帳號無法自行補寫信箱。若只要移除名單上的殘留紀錄，可在 Firebase Console 的 Firestore 資料頁確認 UID 後，刪除該筆 `memberships/{uid}` 文件。工作區及公開空堂分別存放在該 UID 的 `teachers/{uid}` 路徑。
+
+若要在 TutorFlow 內完整刪除帳號及雲端紀錄，可以啟用下述帳號管理服務。管理員確認後，服務會鎖定指定老師，再刪除 Firebase Auth 帳號、會員資料、工作區分塊和公開空堂。工作區包含學生、課程、教學紀錄、收費與設定。瀏覽器裡的草稿及離線 JSON 備份仍留在原裝置。Firestore 只保留無信箱內容的 UID 停用標記，避免舊登入狀態重新建立會員資料。
 
 1. 在測試 Firebase 專案發布本版 Firestore Rules。驗證管理員能看見申請人信箱、一般老師無法存取管理服務，並使用測試帳號驗證刪除。正式啟用前，先比對正在運作的 Firestore 規則，再發布本版規則。
 2. 為帳號管理建立專用 Google Cloud 服務帳號。自訂 IAM 角色所需權限為 `firebaseauth.users.get`、`firebaseauth.users.delete`、`datastore.databases.get`、`datastore.entities.get`、`datastore.entities.list`、`datastore.entities.create`、`datastore.entities.update`、`datastore.entities.delete`。將角色授予此服務帳號。參見 [Firestore IAM](https://docs.cloud.google.com/firestore/native/docs/security/iam) 與 [Firebase 帳號刪除 API](https://docs.cloud.google.com/identity-platform/docs/reference/rest/v1/projects.accounts/delete)。
