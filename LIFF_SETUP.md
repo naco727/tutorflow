@@ -48,7 +48,7 @@ LIFF 頁面會執行 `liff.init({ liffId })`。在 LINE App 內建瀏覽器會�
 
 4. 儲存並發布圖文選單。
 
-家長點擊後會先進入 LIFF，再載入 `?mode=public` 公開頁面。公開頁面只讀取 Firestore `publicAvailability` 的日期、起訖時間與狀態，不會載入 TutorFlow 管理端的學生、課程、教學紀錄或財務資料。
+家長點擊後會先進入 LIFF，再載入 `?mode=public` 公開頁面。公開頁面從 Firestore 的 `teachers/{uid}/public/publicAvailability` 文件讀取空堂日期、起訖時間與狀態。UID 取自 `firebase-config.js` 的 `TUTORFLOW_PUBLIC_TEACHER_UID`。
 
 ## 讀取失敗行為
 

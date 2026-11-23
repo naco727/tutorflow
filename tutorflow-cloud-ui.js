@@ -13,19 +13,6 @@ function mountCloudControls() {
       <button type="button" class="btn btn-secondary" id="retryCloudAccount">重新檢查</button>
       <button type="button" class="btn btn-ghost" id="leaveCloudAccount">返回登入</button>
     </div>`}));
-  $('#authLoginPanel').insertAdjacentHTML('afterbegin', `
-    <div id="authMethods" class="segmented" role="group" aria-label="登入方式">
-      <button type="button" data-auth-method="phone" class="active" aria-pressed="true">手機驗證碼</button>
-      <button type="button" data-auth-method="email" aria-pressed="false">電子郵件連結</button>
-    </div>`);
-  $('#phoneAuthForm').insertAdjacentHTML('afterend', `
-    <form id="emailAuthForm" hidden>
-      <div class="field"><label for="loginEmail">電子郵件</label><input class="input" id="loginEmail" type="email" autocomplete="email" required></div>
-      <div class="form-actions">
-        <button type="submit" class="btn btn-primary" id="emailLinkButton">寄送登入連結</button>
-        <button type="button" class="btn btn-ghost" id="leaveEmailLink" hidden>返回登入</button>
-      </div>
-    </form>`);
   $('.topbar').insertAdjacentHTML('afterend', `
     <div class="cloud-sync-bar" aria-live="polite">
       <span id="cloudStatus"></span>
@@ -48,12 +35,6 @@ function mountCloudControls() {
       </div>
       <button type="button" class="btn btn-ghost btn-sm" id="toggleSignup" hidden></button>
       <div id="teacherAdminRows"></div>
-    </section>
-    <section class="card cloud-settings">
-      <div class="section-head"><div><h2>私人預約</h2><p>記錄與學生約定的時段</p></div>
-        <button type="button" class="btn btn-secondary" id="addPrivateBooking">新增預約</button>
-      </div>
-      <div id="privateBookingRows"></div>
     </section>`);
   $('#availabilityPreview').insertAdjacentHTML('beforebegin', '<p class="form-hint" id="availabilitySyncScope"></p>');
   const availabilityCard = $('.availability-card');
@@ -61,60 +42,6 @@ function mountCloudControls() {
   availabilityCard.querySelector('.section-head p').textContent = '設定每週可授課時間，自動扣除已安排的課程。';
   $('[data-availability-action="preview"]').remove();
   $('#exportData').closest('.card').querySelector('.section-head p').textContent = '下載目前工作區，或預覽並匯入 TutorFlow JSON。';
-}
-
-function renderPrivateBookings() {
-  const output = $('#privateBookingRows');
-  if (!output || !data) return;
-  const labels = {pending: '待確認', confirmed: '已確認', cancelled: '已取消'};
-  output.replaceChildren();
-  if (!data.bookings.length) output.textContent = '目前沒有私人預約。';
-  const sorted = data.bookings.slice().sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
-  for (const booking of sorted) {
-    const row = document.createElement('div');
-    row.className = 'data-action';
-    const label = document.createElement('span');
-    label.textContent = `${booking.date} ${booking.start}–${booking.end} · ${booking.title} · ${labels[booking.status] || '待確認'}`;
-    const edit = document.createElement('button');
-    edit.className = 'btn btn-secondary btn-sm';
-    edit.textContent = '編輯';
-    edit.onclick = () => privateBookingForm(booking);
-    row.append(label, edit);
-    output.append(row);
-  }
-}
-
-function privateBookingForm(booking = {}) {
-  const session = cloudSession;
-  if (!session) return;
-  openModal(`<div class="modal-head"><h2>${booking.id ? '編輯私人預約' : '新增私人預約'}</h2><button class="close-btn" data-close aria-label="關閉">×</button></div>
-    <form class="form-grid" id="privateBookingForm">
-      <div class="field full"><label for="bookingTitle">預約名稱</label><input class="input" id="bookingTitle" name="title" value="${esc(booking.title)}" required></div>
-      <div class="field"><label for="bookingStudent">學生</label><select class="input" id="bookingStudent" name="studentId"><option value="">未指定</option>${data.students.map(item => `<option value="${item.id}" ${item.id === booking.studentId ? 'selected' : ''}>${esc(item.name)}</option>`).join('')}</select></div>
-      <div class="field"><label for="bookingDate">日期</label><input type="date" class="input" id="bookingDate" name="date" value="${booking.date || todayISO()}" required></div>
-      <div class="field"><label for="bookingStart">開始時間</label><input type="time" class="input" id="bookingStart" name="start" value="${booking.start || '14:00'}" required></div>
-      <div class="field"><label for="bookingEnd">結束時間</label><input type="time" class="input" id="bookingEnd" name="end" value="${booking.end || '15:00'}" required></div>
-      <div class="field"><label for="bookingStatus">狀態</label><select class="input" id="bookingStatus" name="status">${[['pending', '待確認'], ['confirmed', '已確認'], ['cancelled', '已取消']].map(([key, label]) => `<option value="${key}" ${key === booking.status ? 'selected' : ''}>${label}</option>`).join('')}</select></div>
-      <div class="form-actions full">${booking.id ? '<button type="button" class="btn btn-danger" id="deletePrivateBooking">刪除</button>' : ''}<button type="submit" class="btn btn-primary">儲存</button></div>
-    </form>`);
-  $('#privateBookingForm').onsubmit = event => {
-    event.preventDefault();
-    if (session !== cloudSession) return;
-    const fields = Object.fromEntries(new FormData(event.target));
-    if (!fields.title.trim() || fields.end <= fields.start) { toast('請填寫名稱，並確認結束時間晚於開始時間。'); return; }
-    const next = {...booking, ...fields, title: fields.title.trim(), id: booking.id || uid('booking')};
-    data.bookings = [...data.bookings.filter(item => item.id !== next.id), next];
-    save();
-    closeModal();
-    renderPrivateBookings();
-  };
-  if (booking.id) $('#deletePrivateBooking').onclick = () => {
-    if (session !== cloudSession || !confirm('確定刪除這筆私人預約？')) return;
-    data.bookings = data.bookings.filter(item => item.id !== booking.id);
-    save();
-    closeModal();
-    renderPrivateBookings();
-  };
 }
 
 function cloudErrorText(error) {
@@ -317,9 +244,9 @@ async function observeCloudAccount(user) {
   try {
     const token = await user.getIdTokenResult();
     if (generation !== accountGeneration) return;
-    // Firebase also reports the password provider for email link sign-in.
-    if (!['phone', 'password'].includes(token.signInProvider)) {
-      showCloudGate('請使用手機驗證碼或電子郵件連結登入。', user);
+    // Firebase reports the password provider for email link sign-in.
+    if (token.signInProvider !== 'password' || token.claims.email_verified !== true) {
+      showCloudGate('請返回登入，使用電子郵件連結進入工作區。', user);
       return;
     }
     const db = await firestoreDb();
@@ -349,10 +276,6 @@ async function observeCloudAccount(user) {
       const active = membership.status === 'active' && ['admin', 'teacher'].includes(membership.role);
       if (cloudSession && (!active || membership.role !== cloudSession.membership.role || membership.legacyImport !== cloudSession.membership.legacyImport)) {
         resetSignedInPage();
-        return;
-      }
-      if (token.signInProvider === 'password' && !token.claims.email_verified) {
-        showCloudGate('請返回登入，使用電子郵件連結驗證信箱。', user);
         return;
       }
       if (!active) {
@@ -395,7 +318,7 @@ async function observeCloudAccount(user) {
 function renderCloudAccount() {
   const session = cloudSession;
   if (!session) return;
-  $('#cloudAccount').textContent = `${session.user.email || session.user.phoneNumber || session.user.uid} · ${session.user.email ? '電子郵件' : '手機'}${session.membership.role === 'admin' ? ' · 管理員' : ''}`;
+  $('#cloudAccount').textContent = `${session.user.email || session.user.uid}${session.membership.role === 'admin' ? ' · 管理員' : ''}`;
   $('#legacyBackup').hidden = session.membership.legacyImport !== true;
   $('#teacherAdmin').hidden = session.membership.role !== 'admin';
   $('#availabilitySyncScope').textContent = '同步後，空堂會儲存到你帳號下的公開文件。';
@@ -529,7 +452,6 @@ function exportCloudDrafts() {
 }
 
 function bindCloudWorkspace() {
-  $('#addPrivateBooking').onclick = () => privateBookingForm();
   $('#retryCloudSave').onclick = () => {
     if (cloudSession?.pending) flushWorkspace();
     else if (cloudSession) reloadCloudWorkspace();

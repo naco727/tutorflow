@@ -13,7 +13,7 @@ const chunk = (uid, index = 0) => `${head(uid)}/chunks/${index}`;
 const publicSlot = 'publicAvailability/2099-01-01_0900';
 const slot = {date: '2099-01-01', start: '09:00', end: '10:00', status: 'available'};
 const metadata = (revision = 1, chunkCount = 1) => ({version: 1, revision, chunkCount, migrated: false, mutationId: `action-${revision}`});
-const as = (uid, provider = 'phone', verified = false) => fixture.authenticatedContext(uid, {
+const as = (uid, provider = 'password', verified = true) => fixture.authenticatedContext(uid, {
   email_verified: verified, firebase: {sign_in_provider: provider}
 }).firestore();
 
@@ -49,13 +49,17 @@ test('A and B can write and read their own data only, including payment and note
   await assertFails(setDoc(doc(as('teacher-a'), chunk('teacher-a')), {payload: 'unversioned'}));
 });
 
-test('approval is server enforced and password accounts need verified Email', async () => {
+test('approval is server enforced and phone or unverified accounts are denied', async () => {
   for (const uid of ['pending', 'disabled', legacy]) {
     await assertFails(getDoc(doc(as(uid), head(uid))));
     await assertFails(setDoc(doc(as(uid), head(uid)), metadata()));
   }
   await assertFails(getDoc(doc(as('teacher-a', 'password', false), head('teacher-a'))));
   await assertSucceeds(getDoc(doc(as('teacher-a', 'password', true), head('teacher-a'))));
+  const phone = as('teacher-a', 'phone', true);
+  await assertFails(getDoc(doc(phone, membership('teacher-a'))));
+  await assertFails(getDoc(doc(phone, head('teacher-a'))));
+  await assertFails(setDoc(doc(phone, 'teachers/teacher-a/public/publicAvailability'), {slots: []}));
   await assertFails(getDoc(doc(as('teacher-a', 'google.com', true), head('teacher-a'))));
 });
 
@@ -102,22 +106,15 @@ test('each approved teacher can update exactly one public document for their UID
   assert.deepEqual((await getDoc(doc(guest, path))).data(), {slots: [slot]});
 });
 
-test('original LINE collection keeps compatibility through explicit cutover', async () => {
+test('old root availability and bridge are inaccessible to app clients', async () => {
   const guest = fixture.unauthenticatedContext().firestore(), teacher = as('teacher-a');
-  await assertSucceeds(getDocs(collection(guest, 'publicAvailability')));
+  await assertFails(getDocs(collection(guest, 'publicAvailability')));
+  await assertFails(getDoc(doc(guest, publicSlot)));
+  await assertFails(getDoc(doc(teacher, publicSlot)));
   await assertFails(setDoc(doc(teacher, publicSlot), slot));
-  await assertSucceeds(setDoc(doc(as(legacy), publicSlot), slot));
-  await assertFails(setDoc(doc(as('admin'), 'legacyLineBridge/config'), {cutoverComplete: true}));
-  await fixture.withSecurityRulesDisabled(context =>
-    setDoc(doc(context.firestore(), 'legacyLineBridge/config'), {cutoverComplete: true}));
-  await assertFails(setDoc(doc(as(legacy), publicSlot), slot));
-  await assertFails(setDoc(doc(as('teacher-b'), publicSlot), slot));
-  await assertFails(setDoc(doc(teacher, publicSlot), slot));
-  await assertSucceeds(getDoc(doc(guest, publicSlot)));
-  const bookedPath = 'publicAvailability/2099-01-01_1200';
-  await fixture.withSecurityRulesDisabled(context => setDoc(doc(context.firestore(), bookedPath), {...slot, status: 'booked'}));
-  await assertFails(deleteDoc(doc(teacher, bookedPath)));
-  await assertFails(setDoc(doc(teacher, bookedPath), slot));
+  await assertFails(deleteDoc(doc(teacher, publicSlot)));
+  await assertFails(setDoc(doc(as(legacy, 'phone'), publicSlot), slot));
+  await assertFails(getDoc(doc(as('admin'), 'legacyLineBridge/config')));
 });
 
 test('only admin controls whether new pending memberships can be created', async () => {

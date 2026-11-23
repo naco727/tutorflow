@@ -23,34 +23,6 @@ async function emulatorCodes(path) {
   return response.json();
 }
 
-test('SMS emulator rejects incorrect codes and resolves the same phone to the same UID', async () => {
-  // The browser SDK implements the reCAPTCHA widget. Use Auth REST only against the local emulator here.
-  const phoneNumber = '+886900000101';
-  const authRequest = (operation, data) => fetch(origin + '/identitytoolkit.googleapis.com/v1/accounts:' + operation + '?key=demo-tutorflow', {
-    method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(data)
-  });
-  let firstUid;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const sent = await authRequest('sendVerificationCode', {phoneNumber});
-    assert.equal(sent.ok, true);
-    const {sessionInfo} = await sent.json();
-    const {verificationCodes} = await emulatorCodes('verificationCodes');
-    const code = verificationCodes.find(item => item.phoneNumber === phoneNumber && item.sessionInfo === sessionInfo)?.code;
-    assert.match(code, /^\d{6}$/);
-    const incorrect = await authRequest('signInWithPhoneNumber', {sessionInfo, code: code === '111111' ? '222222' : '111111'});
-    assert.equal(incorrect.status, 400);
-    assert.match((await incorrect.json()).error.message, /INVALID_CODE/);
-    const confirmed = await authRequest('signInWithPhoneNumber', {sessionInfo, code});
-    assert.equal(confirmed.ok, true);
-    const {localId, idToken} = await confirmed.json();
-    assert.ok(localId);
-    if (firstUid) assert.equal(localId, firstUid);
-    firstUid = localId;
-    const lookup = await authRequest('lookup', {idToken});
-    assert.equal((await lookup.json()).users[0].phoneNumber, phoneNumber);
-  }
-});
-
 test('password registration, verification, reset, approval and two clients sharing one workspace', async () => {
   const app = userApp('email-a'), device = userApp('email-device');
   const auth = app.auth(), db = app.firestore();
@@ -62,7 +34,7 @@ test('password registration, verification, reset, approval and two clients shari
     const {user} = await auth.createUserWithEmailAndPassword(email, firstPassword);
     const uid = user.uid;
     const access = db.collection('memberships').doc(uid);
-    await access.set({role: 'teacher', status: 'pending'});
+    await assert.rejects(access.set({role: 'teacher', status: 'pending'}), {code: 'permission-denied'});
     await assert.rejects(workspaceStore(db, uid).load(), {code: 'permission-denied'});
     await user.sendEmailVerification();
     const verification = (await emulatorCodes('oobCodes')).oobCodes.find(item => item.email === email && item.requestType === 'VERIFY_EMAIL');
@@ -70,6 +42,8 @@ test('password registration, verification, reset, approval and two clients shari
     await auth.applyActionCode(verification.oobCode);
     await auth.currentUser.reload();
     assert.equal(auth.currentUser.emailVerified, true);
+    await auth.currentUser.getIdToken(true);
+    await access.set({role: 'teacher', status: 'pending'});
     await auth.sendPasswordResetEmail(email);
     const reset = (await emulatorCodes('oobCodes')).oobCodes.find(item => item.email === email && item.requestType === 'PASSWORD_RESET');
     assert.ok(reset);

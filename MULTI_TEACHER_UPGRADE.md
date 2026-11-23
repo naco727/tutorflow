@@ -1,6 +1,6 @@
 # TutorFlow 多老師工作區升級
 
-此版本保存在本機 `codex/multi-teacher-cloud`。正式 GitHub Pages、Firestore、Firebase Auth、LINE Webhook 與 Cloudflare Worker 目前採用既有設定。
+本文件說明 TutorFlow 的多老師工作區、電子郵件連結登入與 LINE Bot 空堂讀取。正式環境設定需依下列順序切換。
 
 ## 程式盤點與 LINE 相容性
 
@@ -20,13 +20,11 @@
 
 | Firestore 路徑 | 用途與存取 |
 | --- | --- |
-| `memberships/{uid}` | 老師能查看自己的狀態。手機或 Email 帳號可提出 `teacher/pending` 申請。已核准的管理員可列表、核准與停用老師。Admin 角色及 `legacyImport` 由 Firebase Console 維護 |
+| `memberships/{uid}` | 已驗證信箱的老師能查看自己的狀態並提出 `teacher/pending` 申請。已核准的管理員可列表、核准與停用老師。Admin 角色及 `legacyImport` 由 Firebase Console 維護 |
 | `teachers/{uid}/workspace/head` | 工作區版本、分塊數、操作 ID 與初次遷移標記 |
 | `teachers/{uid}/workspace/head/chunks/{index}` | 工作區 JSON 的 UTF-8 分塊。只讀寫已核准本人 UID 的資料，管理員也不能讀其他人的學生資料 |
 | `systemSettings/main` | 管理員可開放或暫停新的工作區申請。暫停後，Firebase Auth 仍可產生帳號，Firestore 會拒絕建立申請 |
 | `teachers/{uid}/public/publicAvailability` | 每個 UID 只有一份公開空堂文件。其 `slots` 陣列包含原空堂欄位。公開可讀該文件，只有已核准的本人可寫。Rules 不開放同集合列表及私人工作區 |
-| `legacyLineBridge/config` | 由 Console 設定 `cutoverComplete: true` 後停止舊測試 UID 的舊集合寫入 |
-| `publicAvailability/{slotId}` | 舊集合供切換前使用及比對，保有文件 ID 與所有欄位 |
 
 工作區保留 `students`、`courses`、`notes`、`settings`，另加入 `bookings`。收款以原有課程資料為準。一整筆工作區修改以 Firestore 交易更新版本與變動分塊。每個開啟的工作區只監聽一份版本文件，版本變更時才重新讀取內容。原子上傳上限為 UTF-8 JSON 3,840,000 bytes。超過時畫面提示匯出，需另行規劃大型工作區儲存策略。分塊及公開 `slots` 內容停用索引，無需複合索引。公開文件的 Rules 限制根欄位及陣列型別。Firestore Rules 無法逐一驗證任意長度陣列中的每個物件，所以應先核對資料後再發布，公開文件只應放空堂資料。
 
@@ -36,27 +34,27 @@
 
 1. 在專案根目錄執行 `npm ci`、`npm run build`、`npm test`、`npm run test:rules` 及 `npm run test:auth`。使用 Node.js 22 以上與 Java 21。
 2. UI 驗收可啟動 `npm run emulators`，另開終端執行 `python -m http.server 8765 --bind 127.0.0.1`。開啟 `http://127.0.0.1:8765/`。本機迴路來源使用 `demo-tutorflow`。
-3. 用模擬器建立兩個測試帳號。使用 Auth Emulator 顯示的手機驗證碼或電子郵件登入連結，接著在 Emulator UI 以兩個 UID 建立對應的 active 會員文件。確認另一位老師看不到第一位老師的學生、收款與預約。開兩個獨立瀏覽器設定檔用同一 UID 測試同步及衝突。
+3. 用模擬器建立兩個測試帳號。使用 Auth Emulator 顯示的電子郵件登入連結，接著在 Emulator UI 以兩個 UID 建立對應的 active 會員文件。確認另一位老師看不到第一位老師的學生、收款與預約。開兩個獨立瀏覽器設定檔用同一 UID 測試同步及衝突。
 
 官方文件可查閱 [Firebase Auth 模擬器](https://firebase.google.com/docs/emulator-suite/connect_auth)、[Security Rules 模擬測試](https://firebase.google.com/docs/firestore/security/test-rules-emulator) 與 [Firestore 交易](https://firebase.google.com/docs/firestore/manage-data/transactions)。
 
-本次通過前端語法檢查、9 項單元測試、7 項 Firestore Rules 測試及 2 項 Auth 模擬器測試。涵蓋原資料格式、收款及關聯、原子遷移、跨裝置版本衝突、私有工作區隔離、單份公開文件、Worker 讀取與原有篩選、SMS 錯誤碼、Email 驗證與重設密碼。已唯讀備份並在本機核對原集合的 10 份空堂。內建瀏覽器無法連接本機預覽，實體瀏覽器的完整 UI、正式 SMS/reCAPTCHA、正式 LINE 及已部署的 Worker 仍需驗收。
+本次通過前端語法檢查、9 項單元測試、7 項 Firestore Rules 測試及 2 項 Auth 模擬器測試。權限測試涵蓋拒絕手機登入的工作區存取、封鎖舊空堂根集合、允許匿名讀取指定老師的空堂文件。既有 Email 管理員保留原 UID 的流程已在模擬器驗證。正式郵件連結與 LINE 聊天室仍需驗收。
 
 ## 正式部署前檢查
 
 1. 舊版在每個有真實資料的瀏覽器先使用「匯出 JSON」。確認檔案可讀，留存學生、課程、教學紀錄、已收款堂數及空堂設定的基準。確認資料所在的瀏覽器來源與正式網址。
 2. 由有權限的 Firebase 擁有人以 Cloud Firestore 匯出保存正式資料，涵蓋 `publicAvailability` 及 Worker 依賴的集合。保留文件 ID、欄位型別與原作業規則，先在隔離的環境核對還原流程。保存正式部署的 Git SHA、現行 Firebase Auth Provider 設定和 LINE 設定。Firestore 管理匯出存取權及計費參見 [匯出與匯入資料](https://firebase.google.com/docs/firestore/manage-data/export-import)。
-3. 在 Firebase Console 的 Authentication 啟用 Phone，並在「電子郵件／密碼」供應商中同時啟用「電子郵件／密碼」及「電子郵件連結（不需要密碼即可登入）」。在 Authentication 設定的授權網域確認有 `naco727.github.io`。正式 SMS 需連結 Cloud Billing 並核對 Blaze、SMS 地區政策、實收簡訊及防濫用設定。測試手機號碼應使用模擬器或測試專案。若 Firestore 強制 App Check，須在測試用網域驗證網頁及既有 Worker 的存取方式後才能上線。參見 [Firebase 電子郵件連結登入](https://firebase.google.com/docs/auth/web/email-link-auth)、[Firebase Phone Authentication](https://firebase.google.com/docs/auth/web/phone-auth) 與 [SMS 計費說明](https://firebase.google.com/docs/auth/faq-and-troubleshooting)。
-4. 由擁有人確認真正的登入方式與新正式 UID。保留舊 Auth 帳號和 UID。以 Firebase Console 在 `memberships/{正式UID}` 建立 `role: "admin"`（或老師用 `"teacher"`）、`status: "active"`。只有確定可讀取該瀏覽器舊資料的擁有人才可加布林 `legacyImport: true`。
+3. 在 Firebase Console 的 Authentication「電子郵件／密碼」供應商中同時啟用「電子郵件／密碼」及「電子郵件連結（不需要密碼即可登入）」。在授權網域加入 `naco727.github.io`。先在測試分支實際收信並驗證，再關閉 Phone 登入供應商。參見 [Firebase 電子郵件連結登入](https://firebase.google.com/docs/auth/web/email-link-auth)。
+4. 發布前，使用既有管理員的信箱完成登入，核對原 UID 及 `memberships/{uid}` 的 `role: "admin"`、`status: "active"`。若原帳號只有手機號碼，請由 Firebase 專案管理者先將信箱加到同一個 Auth UID。Firebase Admin SDK 支援按 UID 更新電子郵件。登入連結會驗證信箱。參見 [Firebase Admin 使用者管理](https://firebase.google.com/docs/auth/admin/manage-users#update_a_user)。
 5. 完成測試、取得批准後，先對照正式 Firestore Rules，把 `firestore.rules` 合併與核對後再發布至正式 `(default)`。依原設定保留相關已部署索引，另外將 `chunks.payload` 設為不索引。待正式 Rules、索引及角色確認後，才合併分支並由 GitHub Pages 從已驗證的分支部署。正式讀取或寫入需驗證 [Firebase 官方規則部署步驟](https://firebase.google.com/docs/firestore/security/get-started)。
-6. 按下方切換步驟準備及核對新空堂文件。正式 Worker 完成同一批空堂驗收後，再以 Console 設定 `legacyLineBridge/config.cutoverComplete: true`，停用舊集合寫入。原集合仍可保留供核對或回復。
+6. 先將正式 Worker 切換至下方的老師文件並驗收「詢問時段」。接著發布新版 Firestore Rules，核對舊根集合已無法從客戶端讀取，最後在完成備份並確認刪除後，從 Firebase Console 移除根集合 `publicAvailability`。
 
 若日後支援多個 LINE Bot，可為各 Worker 環境配置不同的 `TEACHER_UID`，或以可信任的 LINE Channel 對應表選定 UID。
 
 ## 電子郵件連結登入
 
 1. 在 TutorFlow 輸入電子郵件並點「寄送登入連結」，然後開啟信中的連結。同一瀏覽器可使用一小時內暫存的收信地址自動驗證。在其他裝置或瀏覽器開啟時，請輸入原收信地址。
-2. 既有 Firebase Email 帳號沿用同一信箱登入時，繼續使用原 UID 和會員角色。若管理員 UID 只有手機登入，請先用手機登入原帳號。用未綁定的信箱開啟連結會建立另一個帳號，須由管理員核准。
+2. 既有 Firebase Email 帳號沿用同一信箱登入時，繼續使用原 UID 和會員角色。用未綁定的信箱開啟連結會建立另一個帳號，須由管理員核准。
 3. 連結同時驗證信箱。Firebase 在權限權杖中仍將電子郵件連結識別為 `password` 提供者，因此沿用現有 Firestore Rules 的 UID、信箱驗證及會員權限檢查。
 
 ## LINE Bot 及公開空堂切換
@@ -64,8 +62,8 @@
 1. 備份 `turtorflow/(default)` 中完整的 `publicAvailability` 集合。以 Firestore REST `listDocuments` 保存所有分頁的 `documents` 陣列及原文件名稱。保留原 Firestore Value 形式的 `fields`，如 `stringValue`、`mapValue` 或 `arrayValue`，不要先轉成一般 JavaScript 型別。
 2. 執行 `node scripts/availability-migration.cjs prepare 舊資料備份.json 正式老師UID 審核用目標.json`。這個工具只從本機備份產生新檔。目標是一份包含 `slots` 的文件，每個陣列元素原樣保留一份舊文件的 `fields`。舊文件 ID 仍留在來源及備份。先確認文件內容全可公開，並確認目標目前不存在。
 3. 正式確認後，使用具備權限的 Firestore 管理工具建立新文件。若透過 API，使用 `createDocument`，讓目標已存在時報錯。讀回目標的 Firestore REST Document，執行 `node scripts/availability-migration.cjs verify 舊資料備份.json 正式老師UID 讀回目標.json`，核對 UID 路徑、陣列順序、所有欄位及型別。
-4. 把你提供的完整 Worker 匯出為本機 `old-worker.mjs`，執行 `node worker/apply-availability-change.cjs old-worker.mjs updated-worker.mjs`。用 diff 核對輸出。補丁會檢查原讀取程式特徵並保留圖文選單、Quick Reply、Flex 及預約訊息流程。新 Worker 只會以環境變數 `TEACHER_UID` 讀取一份文件。選填 `FIREBASE_PROJECT_ID` 與 `FIRESTORE_DATABASE_ID`，預設沿用 `turtorflow/(default)`。沿用目前 LINE 相關 Secrets。
-5. 在測試環境比對新舊 Bot 的相同時段回覆與預約連結。確認正式環境切換窗口後再部署新 Worker，Webhook URL 維持原設定。若要切換原公開網頁相容路徑，將 `TUTORFLOW_PUBLIC_TEACHER_UID` 設為同一個 UID。LINE Bot 的回覆本身可獨立完成。
+4. 若 Worker 還在列出根集合，匯出目前完整 Worker 為 `old-worker.mjs`，在專案根目錄執行 `node worker/apply-availability-change.cjs old-worker.mjs updated-worker.mjs`。補丁只更新空堂讀取與對應的呼叫。核對圖文選單、Quick Reply、Flex 及預約訊息流程，沿用目前 LINE 相關 Secrets。
+5. 在 Cloudflare Worker 的「Settings → Variables and Secrets」加入文字環境變數 `TEACHER_UID`，值為 `Gt8LnIg2RHNLIdVIYGiI5YomyWK2`。Worker 會直接以 REST GET 讀取 `teachers/{TEACHER_UID}/public/publicAvailability`，並解析 `slots`。專案與資料庫預設為 `turtorflow` 與 `(default)`。公開讀取無需 Firebase 私密金鑰。切換後保持原 Webhook URL，從 LINE 聊天室點「詢問時段」，核對顯示及預約連結。舊公開網頁也已設定讀取相同老師的文件。參見 [Cloudflare Workers 環境變數](https://developers.cloudflare.com/workers/configuration/environment-variables/)。
 6. 若需要回復，使用保存的原 Worker 版本和舊集合。原文件在切換期間保留，注意並人工核對切換後新文件上的變更，避免復原到過期空堂。任何正式資料回寫或重啟舊寫入須先獲批准。
 
 ## 遷移與還原
