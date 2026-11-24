@@ -1,11 +1,14 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const {test} = require('node:test');
+const vm = require('node:vm');
 const firebase = require('firebase/compat/app');
 require('firebase/compat/auth');
 require('firebase/compat/firestore');
 const {initializeTestEnvironment} = require('@firebase/rules-unit-testing');
 const {doc, setDoc} = require('firebase/firestore');
-const {empty, workspaceStore} = require('../tutorflow-cloud.js');
+const cloud = require('../tutorflow-cloud.js');
+const {empty, workspaceStore} = cloud;
 const availability = require('../tutorflow-availability.js');
 const studentIndex = require('../tutorflow-student-index.js');
 
@@ -78,20 +81,97 @@ test('password registration, verification, reset, approval and two clients shari
     let batches = 0;
     const interruptedIndexDb = {
       collection: db.collection.bind(db),
-      runTransaction: callback => {
+      runTransaction: async callback => {
         batches += 1;
         if (batches === 1) return db.runTransaction(callback);
         throw Object.assign(new Error('offline'), {code: 'unavailable'});
       }
     };
-    await assert.rejects(studentIndex.reconcile(interruptedIndexDb, uid, base.revision, originalEntries), {code: 'unavailable'});
-    assert.equal((await students.get({source: 'server'})).size, 100);
+    await assert.rejects(studentIndex.reconcile(interruptedIndexDb, uid, base.revision, originalEntries), {
+      code: 'unavailable', stage: '提交索引寫入', written: 100
+    });
+    const partial = await students.get({source: 'server'});
+    assert.equal(partial.size, 100);
     assert.equal((await first.load()).text, base.text);
-    assert.equal(await studentIndex.reconcile(db, uid, base.revision, originalEntries), 101);
+    const removeTestIndex = db.batch();
+    for (const entry of partial.docs) removeTestIndex.delete(entry.ref);
+    await removeTestIndex.commit();
+    const restoreGate = Promise.withResolvers();
+    const loginSync = Promise.withResolvers();
+    const loadStarted = Promise.withResolvers();
+    const nodes = new Map();
+    const log = [];
+    let membershipChanged, loads = 0, noWorkspace = false;
+    const uiDb = {
+      collection(name) {
+        if (name !== 'memberships') return db.collection(name);
+        return {doc: () => ({onSnapshot: (_, next) => { membershipChanged = next; }})};
+      },
+      runTransaction: db.runTransaction.bind(db)
+    };
+    const context = vm.createContext({
+      TutorFlowCloud: {...cloud, workspaceStore: () => ({
+        load: async () => {
+          loads += 1;
+          if (loads === 1) {
+            loadStarted.resolve();
+            await restoreGate.promise;
+          }
+          if (noWorkspace) return {revision: 0, text: '', chunks: []};
+          return first.load();
+        },
+        watch: () => () => {}
+      })},
+      TutorFlowStudentIndex: studentIndex,
+      FIREBASE_CONFIG: {projectId},
+      $: selector => {
+        if (!nodes.has(selector)) nodes.set(selector, {});
+        return nodes.get(selector);
+      },
+      console: {info: (label, details) => {
+        log.push(details);
+        if (details.source === 'login' && details.written !== undefined) loginSync.resolve(details);
+      }, error: (_, details) => loginSync.reject(Error(JSON.stringify(details)))},
+      firebaseAuth: () => Promise.resolve(auth), firestoreDb: () => Promise.resolve(uiDb),
+      data: null, teacherUser: auth.currentUser, uid: () => 'fixture',
+      startAuthenticatedApp: () => {}
+    });
+    vm.runInContext(fs.readFileSync('tutorflow-cloud-ui.js', 'utf8'), context);
+    await vm.runInContext(`
+      lockCloudAccount = () => {};
+      showCloudGate = () => {};
+      renderCloudAccount = () => {};
+      cloudStatus = () => {};
+      bindSettingsTabs = () => {};
+      bindCloudWorkspace();
+      observeCloudAccount(teacherUser);
+    `, context);
+    const observing = membershipChanged({
+      exists: true, metadata: {},
+      data: () => ({role: 'teacher', status: 'active', email})
+    });
+    await loadStarted.promise;
+    assert.equal((await students.get({source: 'server'})).size, 0);
+    assert.equal(log.length, 0);
+    restoreGate.resolve();
+    await observing;
+    const synced = await loginSync.promise;
+    assert.equal(synced.written, 101);
+    assert.equal(synced.total, 101);
+    assert.equal(log[0].studentCount, 101);
     const indexSnapshot = await students.get({source: 'server'});
     assert.equal(indexSnapshot.size, 101);
     assert.deepEqual(indexSnapshot.docs.find(entry => entry.id === 'demo').data(), {name: '甲乙', active: true});
     assert.deepEqual(await first.load(), base);
+    await students.doc('demo').delete();
+    await nodes.get('#syncStudentIndex').onclick();
+    assert.equal(loads, 2);
+    assert.deepEqual((await students.doc('demo').get({source: 'server'})).data(), {name: '甲乙', active: true});
+    assert.deepEqual(await first.load(), base);
+    noWorkspace = true;
+    await nodes.get('#syncStudentIndex').onclick();
+    assert.equal((await students.get({source: 'server'})).size, 101);
+    assert.equal(log.at(-1).reason, 'workspace-head-missing');
 
     const {default: lineWorker, handleStudentLookup} = await import('../worker/tutorflow-worker.mjs');
     const emulatorToken = await auth.currentUser.getIdToken();
@@ -128,15 +208,17 @@ test('password registration, verification, reset, approval and two clients shari
       {...draft.students[1], archived: true}, ...draft.students.slice(3), {id: 'new', name: '丁戊'}
     ]};
     const latest = await first.write({text: JSON.stringify(edited), base, mutationId: 'rename-and-archive'});
-    assert.equal(await studentIndex.reconcile(db, uid, latest.revision, studentIndex.entries(edited.students)), 101);
+    assert.deepEqual(await studentIndex.reconcile(db, uid, latest.revision, studentIndex.entries(edited.students)), {
+      total: 101, written: 2, deleted: 1
+    });
     await assert.rejects(studentIndex.reconcile(db, uid, base.revision, originalEntries), {code: 'index-revision-changed'});
     assert.deepEqual((await students.doc('demo').get()).data(), {name: '甲丙', active: true});
-    assert.deepEqual((await students.doc('s-0').get()).data(), {name: '學生 0', active: false});
+    assert.deepEqual((await students.doc('s-0').get()).data(), {name: '學生 0', active: true});
     assert.equal((await students.doc('s-1').get()).exists, false);
     assert.deepEqual((await students.doc('new').get()).data(), {name: '丁戊', active: true});
     assert.deepEqual(await (await lookup('甲乙')).json(), {status: 'not-found'});
     assert.deepEqual(await (await lookup('甲丙')).json(), {status: 'matched', student: {id: 'demo', name: '甲丙'}});
-    assert.deepEqual(await (await lookup('學生 0')).json(), {status: 'not-found'});
+    assert.deepEqual(await (await lookup('學生 0')).json(), {status: 'matched', student: {id: 's-0', name: '學生 0'}});
     assert.deepEqual(await first.load(), latest);
     const slot = {date: '2099-01-01', start: '09:00', end: '10:00', status: 'available'};
     await availability.sync(db, uid, [slot]);

@@ -4,7 +4,7 @@
   const batchSize = 100;
 
   function entries(students) {
-    return students.map(({id, name, archived}) => [id, {name, active: !archived}]);
+    return students.map(({id, name}) => [id, {name, active: true}]);
   }
 
   async function reconcile(db, uid, revision, desired) {
@@ -14,7 +14,9 @@
     const byId = new Map(desired);
 
     const pending = new Map(desired.map(([id, entry]) => [id, {ref: index.doc(id), entry}]));
-    const current = await index.get({source: 'server'});
+    const current = await index.get({source: 'server'}).catch(error => {
+      throw indexError(error, '讀取學生索引');
+    });
     for (const doc of current.docs) {
       const entry = byId.get(doc.id);
       if (!entry) {
@@ -28,6 +30,7 @@
     }
 
     const changes = [...pending.values()];
+    const result = {total: byId.size, written: 0, deleted: 0};
     for (let start = 0; start < changes.length; start += batchSize) {
       const batch = changes.slice(start, start + batchSize);
       await db.runTransaction(async transaction => {
@@ -41,9 +44,20 @@
           if (entry) transaction.set(ref, entry);
           else transaction.delete(ref);
         }
+      }).catch(error => {
+        throw indexError(error, '提交索引寫入', result);
       });
+      const written = batch.filter(change => change.entry).length;
+      result.written += written;
+      result.deleted += batch.length - written;
     }
-    return byId.size;
+    return result;
+  }
+
+  function indexError(error, stage, progress = {written: 0, deleted: 0}) {
+    return Object.assign(new Error(error.message || 'Firestore 未提供錯誤原因。', {cause: error}), {
+      code: error.code || 'unknown', stage, written: progress.written, deleted: progress.deleted
+    });
   }
 
   const api = {entries, reconcile};

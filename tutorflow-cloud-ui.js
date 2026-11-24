@@ -52,7 +52,7 @@ function mountCloudControls() {
   $('#settings-data .settings-grid').insertAdjacentHTML('beforeend', `
     <section class="card">
       <div class="section-head"><div><h2>學生查詢索引</h2><p id="studentIndexStatus" role="status"></p></div></div>
-      <button type="button" class="btn btn-secondary" id="syncStudentIndex">同步學生索引</button>
+      <button type="button" class="btn btn-secondary" id="syncStudentIndex">重新同步學生索引</button>
     </section>`);
 }
 
@@ -148,37 +148,75 @@ function removeDraft(session) {
   try { localStorage.removeItem(session.draftKey); } catch {}
 }
 
-async function syncStudentIndex(session, force = false) {
+function restoreWorkspace(base) {
+  return base.revision ? cloud.validateWorkspace(JSON.parse(base.text)).workspace : cloud.empty();
+}
+
+async function loadRestoredWorkspace(store, source) {
+  try {
+    const base = await store.load();
+    const workspace = restoreWorkspace(base);
+    console.info('[TutorFlow] 雲端工作區載入成功', {
+      source, hasWorkspace: !!base.revision, revision: base.revision, studentCount: workspace.students.length
+    });
+    return {base, workspace};
+  } catch (error) {
+    console.error('[TutorFlow] 雲端工作區載入失敗', {
+      source, code: error.code || 'unknown', message: error.message
+    });
+    throw error;
+  }
+}
+
+async function syncStudentIndex(session, {source = 'workspace-save', restored} = {}) {
   if (session !== cloudSession || session.studentIndexSyncing) return;
-  const base = session.base;
+  const previousBase = session.base;
   const status = $('#studentIndexStatus');
   const button = $('#syncStudentIndex');
+  session.studentIndexSyncing = true;
+  button.disabled = true;
   try {
-    const students = base.revision ? JSON.parse(base.text).students : [];
-    const entries = TutorFlowStudentIndex.entries(students);
+    if (source === 'manual') {
+      status.textContent = '正在重新讀取雲端學生資料…';
+      restored = await loadRestoredWorkspace(session.store, source);
+    }
+    if (session !== cloudSession) return;
+    const {base, workspace} = restored || {base: previousBase, workspace: restoreWorkspace(previousBase)};
+    if (!base.revision) {
+      session.studentIndexSignature = null;
+      status.textContent = '尚無已儲存的雲端工作區。';
+      console.info('[TutorFlow] 學生索引略過', {source, reason: 'workspace-head-missing'});
+      return;
+    }
+    const entries = TutorFlowStudentIndex.entries(workspace.students);
     const signature = JSON.stringify(entries);
-    if (!force && session.studentIndexSignature === signature) return;
-    session.studentIndexSyncing = true;
-    button.disabled = true;
+    if (source !== 'login' && source !== 'manual' && session.studentIndexSignature === signature) return;
     status.textContent = '正在同步已儲存的學生資料…';
-    const count = await TutorFlowStudentIndex.reconcile(session.db, session.user.uid, base.revision, entries);
+    console.info('[TutorFlow] 學生索引同步開始', {source, revision: base.revision, studentCount: entries.length});
+    const result = await TutorFlowStudentIndex.reconcile(session.db, session.user.uid, base.revision, entries);
+    console.info('[TutorFlow] 學生索引同步完成', {source, revision: base.revision, ...result});
     if (session !== cloudSession) return;
     session.studentIndexSignature = signature;
-    status.textContent = `已同步 ${count} 筆學生索引。`;
+    status.textContent = `已核對 ${result.total} 筆學生索引。寫入 ${result.written} 筆，移除 ${result.deleted} 筆。`;
   } catch (error) {
+    const code = error.code || 'unknown';
+    console.error('[TutorFlow] 學生索引同步失敗', {
+      source, stage: error.stage || '準備學生索引', code, message: error.message,
+      written: error.written ?? 0, deleted: error.deleted ?? 0
+    });
     if (session !== cloudSession) return;
     session.studentIndexSignature = null;
-    const reason = error.code === 'permission-denied'
+    const reason = code === 'permission-denied'
       ? '請確認已發布學生索引的 Firestore 規則。'
-      : error.code === 'index-revision-changed'
+      : code === 'index-revision-changed'
         ? '工作區有較新的版本。請待資料更新後重試。'
         : '請稍後重試。';
-    status.textContent = `學生索引同步失敗。工作區儲存可繼續使用。${reason}`;
+    status.textContent = `學生索引同步失敗（${code}）。${reason}`;
   } finally {
     session.studentIndexSyncing = false;
     if (session === cloudSession) {
       button.disabled = false;
-      if (session.base !== base) syncStudentIndex(session);
+      if (session.base !== previousBase) syncStudentIndex(session);
     }
   }
 }
@@ -241,14 +279,14 @@ async function flushWorkspace(session = cloudSession) {
 }
 
 function replaceWorkspace(session, next) {
-  const workspace = next.revision ? cloud.validateWorkspace(JSON.parse(next.text)).workspace : cloud.empty();
+  const workspace = restoreWorkspace(next);
   session.base = next;
   data = workspace;
   if (next.revision) session.base.text = JSON.stringify(workspace);
+  syncStudentIndex(session, {source: 'workspace-restore', restored: {base: next, workspace}});
   closeModal();
   renderView(state.view);
   cloudStatus(session.pending ? '有本機修改尚未同步。' : '已載入雲端資料', !!session.pending);
-  syncStudentIndex(session);
 }
 
 async function refreshWorkspace(session, revision) {
@@ -373,9 +411,8 @@ async function observeCloudAccount(user) {
       opening = true;
       try {
         const store = cloud.workspaceStore(db, user.uid);
-        const base = await store.load();
+        const {base, workspace} = await loadRestoredWorkspace(store, 'login');
         if (generation !== accountGeneration || latestMembership?.status !== 'active') return;
-        const workspace = base.revision ? cloud.validateWorkspace(JSON.parse(base.text)).workspace : cloud.empty();
         const session = {
           db, user, membership: latestMembership, verifiedEmail: email || user.email, emailSync,
           store, base, remoteRevision: base.revision, pending: null, conflict: false,
@@ -383,12 +420,12 @@ async function observeCloudAccount(user) {
         };
         cloudSession = session;
         data = workspace;
+        syncStudentIndex(session, {source: 'login', restored: {base, workspace}});
         startAuthenticatedApp(user);
         renderCloudAccount();
         session.stopWatch = store.watch(revision => refreshWorkspace(session, revision),
           error => { if (session === cloudSession) cloudStatus(cloudErrorText(error), true); });
         cloudStatus(base.revision ? '已載入雲端資料' : '這個帳號還沒有雲端資料');
-        syncStudentIndex(session);
       } catch (error) {
         if (generation === accountGeneration) showCloudGate(cloudErrorText(error), user, true);
       } finally {
@@ -681,7 +718,7 @@ function bindCloudWorkspace() {
   };
   $('#pendingDraft').onclick = exportCloudDrafts;
   $('#syncStudentIndex').onclick = () => {
-    if (cloudSession) syncStudentIndex(cloudSession, true);
+    if (cloudSession) return syncStudentIndex(cloudSession, {source: 'manual'});
   };
   $('#loadTeacherAdmin').onclick = showTeacherAdmin;
   $('#sendAccountVerification').onclick = () => sendAccountVerification(cloudGateIdentity);
