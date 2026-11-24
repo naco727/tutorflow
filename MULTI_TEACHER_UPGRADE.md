@@ -80,7 +80,7 @@ Firestore Rules 只允許已核准且以驗證信箱登入的工作區擁有者�
 2. 若已部署獨立帳號管理服務，先更新 [worker/account-admin.mjs](./worker/account-admin.mjs)。新版的既有刪除帳號流程會一併清理該帳號的索引。
 3. 更新 GitHub Pages。每位老師用自己的帳號登入，前往「更多 → 資料」核對索引筆數。Firestore Console 可再核對該 UID 的 `studentBindingIndex`，例如姓名、狀態和文件 ID。
 4. 更新現有 LINE OA Worker 的 [worker/tutorflow-worker.mjs](./worker/tutorflow-worker.mjs)，在「Settings → Variables and Secrets」確認 `TEACHER_UID` 是這個 OA 對應的老師，新增相同 Firebase 專案的 Web API Key 為 `FIREBASE_WEB_API_KEY`。Worker 會呼叫 Identity Toolkit 驗證老師的 Firebase ID Token，再以同一憑證查詢 Firestore。若網站來源不同，可設定 `TUTORFLOW_ADMIN_ORIGIN`。
-5. 用該老師在 TutorFlow 登入後的 Firebase ID Token 測試 `POST /admin/student-lookup`，送出 `Content-Type: application/json`、`Authorization: Bearer <Firebase ID Token>` 及 `{"name":"學生姓名"}`。只精確比對有效學生。成功時回傳 `matched` 和學生 ID、姓名，無結果回傳 `not-found`，同名回傳 `ambiguous`。用其他老師的登入憑證應收到拒絕。此路由供老師端呼叫，LINE 家長端的綁定流程在下一階段開發。
+5. 用該老師在 TutorFlow 登入後的 Firebase ID Token 測試 `POST /admin/student-lookup`，送出 `Content-Type: application/json`、`Authorization: Bearer <Firebase ID Token>` 及 `{"name":"學生姓名"}`。只精確比對有效學生。成功時回傳 `matched` 和學生 ID、姓名，無結果回傳 `not-found`，同名回傳 `ambiguous`。用其他老師的登入憑證應收到拒絕。此路由獨立於 LINE 家長端的月結綁定。
 
 ### 現有計費流程與月結方案
 
@@ -95,7 +95,13 @@ Firestore Rules 只允許已核准且以驗證信箱登入的工作區擁有者�
 | 彙總 | `renderDashboard()`、`renderFinance()`、`renderReports()` 從應收課程加總金額。收入及月報表加總相同集合的時數。已收是其中 `paid` 為真的金額，待收是應收減已收。畫面顯示才四捨五入，總額以原始數值計算。 |
 | 重複課程 | `materializeRecurrences()` 將規則展開成各堂課，以 `seriesId` 加日期檢查已生成的課程，也會略過 `skipDates`。月結直接用已儲存的每堂課和課程 ID，包含已完成的首堂，毋須再次展開規則。 |
 
-月結的最小方案是讓老師在已登入的 TutorFlow 中選學生和月份，使用現有工作區讀取與上述計費函式產生預覽，只把該學生該月必要的日期、起訖時間、時數、金額、付款狀態及合計交給 Worker。Worker 可用同一套登入驗證限制老師身分，再接受預覽、編輯與手動發送的操作。工作區分塊包含多位學生及其他紀錄，無法直接用 Firestore 依學生或月份查詢，應避免將整份資料傳給 LINE Worker。若日後要求管理頁獨立運作，可抽出目前計費函式供受保護的讀取服務共用，由該服務讀取並核對單一工作區版本，只回傳指定學生月份的必要欄位。
+### 老師月結管理頁
+
+[worker/tutorflow-worker.mjs](./worker/tutorflow-worker.mjs) 可整份貼回現有 LINE OA Worker。月結頁面用已設定的 `TUTORFLOW_TEACHER_UID` 固定老師，並沿用 `FIREBASE_SERVICE_ACCOUNT` 和原有 OAuth 函式讀取 Firestore。服務帳戶應具備工作區及學生索引的讀取權限。既有 `MONTHLY_BINDINGS` KV 及 LINE 設定供家長綁定使用。
+
+1. 在該 Worker 的 **Settings → Variables and Secrets** 新增 `MONTHLY_ADMIN_KEY`，類型選 **Secret**，填入至少 32 字元的隨機密鑰，與圖文選單密鑰分開。
+2. 部署此 Worker 程式，開啟該 Worker 網址的 `/admin/monthly`。輸入月結管理密鑰，按「載入學生」，再選人和月份預覽。
+3. 名單只回傳有效學生的 ID 和姓名。預覽會在 Worker 端核對工作區版本、解碼分塊，再回傳指定學生與月份的課程和合計。只有已完成課程計入應收，預約課程另列試算。這個版本提供唯讀預覽。
 
 姓名可以作初步比對。正式綁定時，再由老師核發一次性邀請碼或確認家長要求，並把 LINE user ID 與老師 UID、學生 ID 一起保存。遇到同名時由老師確認對象。查詢家長時不應回傳姓名是否存在或提供學生清單。Flex Message 應在老師確認收件人和預覽後人工發送。
 

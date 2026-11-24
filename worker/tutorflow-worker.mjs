@@ -1,36 +1,4 @@
-/**
- * TutorFlow LINE Bot
- * Cloudflare Workers 完整版本
- *
- * 功能：
- * 1. 單一 Rich Menu Postback
- * 2. 四個 Quick Reply
- * 3. 教學經驗與成果
- * 4. 課程費用
- * 5. Firestore 可預約時段
- * 6. 上課須知
- * 7. 幾何 PNG 圖示
- * 8. Rich Menu 圖片上傳管理頁
- *
- * Cloudflare Secrets：
- * LINE_CHANNEL_SECRET
- * LINE_CHANNEL_ACCESS_TOKEN
- * RICHMENU_ADMIN_KEY
- *
- * Variables：
- * TEACHER_UID
- * LINE_OA_ID
- * FIREBASE_PROJECT_ID（選填，預設 turtorflow）
- * FIRESTORE_DATABASE_ID（選填，預設 (default)）
- * FIREBASE_WEB_API_KEY（啟用老師學生查詢時必填）
- * TUTORFLOW_ADMIN_ORIGIN（選填，預設 https://naco727.github.io）
- * ICON_BASE_URL（選填）
- */
-
 const PROJECT_ID = "turtorflow";
-
-const MAX_DAYS = 12;
-const MAX_TIMES_PER_DAY = 4;
 
 const C = {
   green: "#176B53",
@@ -42,6 +10,10 @@ const C = {
   muted: "#687889",
   line: "#E5ECE7"
 };
+
+const MAX_DAYS = 12;
+const MAX_TIMES_PER_DAY = 4;
+const BINDING_TTL = 600;
 
 const PRICES = {
   junior: {
@@ -58,56 +30,60 @@ const PRICES = {
   }
 };
 
-// =====================================
+// ========================================
 // Worker 入口
-// =====================================
+// ========================================
 
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
+    if (url.pathname === "/admin/monthly") {
+      if (request.method !== "GET") {
+        return new Response("Method Not Allowed", {status: 405, headers: {Allow: "GET"}});
+      }
+      return monthlyAdminPage();
+    }
+
+    if (url.pathname === "/admin/monthly-students" || url.pathname === "/admin/monthly-preview") {
+      return handleMonthlyAdmin(request, env, url.pathname);
+    }
+
     if (url.pathname === "/admin/student-lookup") {
       return handleStudentLookup(request, env);
     }
 
-    // 圖文選單管理頁
     if (url.pathname === "/admin/richmenu") {
       if (request.method !== "GET") {
         return new Response("Method Not Allowed", {
           status: 405
         });
       }
-
       return adminPage();
     }
 
-    // 管理頁：上傳並啟用
     if (url.pathname === "/admin/richmenu/install") {
       if (request.method !== "POST") {
         return new Response("Method Not Allowed", {
           status: 405
         });
       }
-
       return installRichMenu(request, env);
     }
 
-    // 幾何圖示
     const iconMatch = url.pathname.match(
-      /^\/icons\/(teacher|price|calendar|policy|home|laptop)\.png$/
+      /^\/icons\/(teacher|price|calendar|policy|home|laptop|binding)\.png$/
     );
 
     if (iconMatch) {
       return new Response(iconPNG(iconMatch[1]), {
         headers: {
           "Content-Type": "image/png",
-          "Cache-Control": "public, max-age=86400",
-          "Access-Control-Allow-Origin": "*"
+          "Cache-Control": "public, max-age=86400"
         }
       });
     }
 
-    // 健康檢查
     if (request.method === "GET") {
       return new Response("TutorFlow is online");
     }
@@ -127,10 +103,10 @@ export default {
       });
     }
 
-    const rawBody = await request.text();
+    const body = await request.text();
 
     const verified = await validSignature(
-      rawBody,
+      body,
       request.headers.get("x-line-signature"),
       env.LINE_CHANNEL_SECRET
     );
@@ -144,7 +120,7 @@ export default {
     let payload;
 
     try {
-      payload = JSON.parse(rawBody);
+      payload = JSON.parse(body);
     } catch {
       return new Response("Invalid JSON", {
         status: 400
@@ -156,20 +132,29 @@ export default {
     ).replace(/\/+$/, "");
 
     ctx.waitUntil(
-      Promise.allSettled(
-        (payload.events || []).map(event =>
-          handleEvent(event, env, base)
-        )
-      )
+      processEvents(payload.events || [], env, base)
     );
 
     return new Response("OK");
   }
 };
 
-// =====================================
-// LINE Webhook 簽章
-// =====================================
+// ========================================
+// Webhook 事件處理
+// ========================================
+
+async function processEvents(events, env, base) {
+  for (const event of events) {
+    try {
+      await handleEvent(event, env, base);
+    } catch (error) {
+      console.error(
+        "Event processing failed:",
+        error?.name || "Error"
+      );
+    }
+  }
+}
 
 async function validSignature(body, signature, secret) {
   if (!signature) return false;
@@ -186,15 +171,13 @@ async function validSignature(body, signature, secret) {
       ["verify"]
     );
 
-    const signatureBytes = Uint8Array.from(
-      atob(signature),
-      c => c.charCodeAt(0)
-    );
-
-    return crypto.subtle.verify(
+    return await crypto.subtle.verify(
       "HMAC",
       key,
-      signatureBytes,
+      Uint8Array.from(
+        atob(signature),
+        c => c.charCodeAt(0)
+      ),
       new TextEncoder().encode(body)
     );
   } catch {
@@ -202,33 +185,1882 @@ async function validSignature(body, signature, secret) {
   }
 }
 
-// =====================================
-// 自動繪製幾何圖示
-// =====================================
+async function handleEvent(event, env, base) {
+  if (!event.replyToken) return;
+
+  if (event.mode === "standby") return;
+
+  if (event.type === "postback") {
+    const data = event.postback?.data || "";
+
+    switch (data) {
+      case "menu_open":
+        await reply(
+          env,
+          event.replyToken,
+          menuMessage(base)
+        );
+        return;
+
+      case "menu_experience":
+        await reply(
+          env,
+          event.replyToken,
+          experienceFlex(base)
+        );
+        return;
+
+      case "menu_price":
+        await reply(
+          env,
+          event.replyToken,
+          priceFlex(base)
+        );
+        return;
+
+      case "menu_availability":
+        await handleAvailability(
+          event,
+          env,
+          base
+        );
+        return;
+
+      case "menu_policy":
+        await reply(
+          env,
+          event.replyToken,
+          policyFlex(base)
+        );
+        return;
+
+      case "bind_monthly_student":
+        await startMonthlyBinding(
+          event,
+          env,
+          base
+        );
+        return;
+
+      case "cancel_monthly_binding":
+        await cancelMonthlyBinding(
+          event,
+          env,
+          base
+        );
+        return;
+
+      default:
+        return;
+    }
+  }
+
+  if (
+    event.type === "message" &&
+    event.message?.type === "text"
+  ) {
+    const handled = await handleBindingText(
+      event,
+      env,
+      base
+    );
+
+    if (handled) return;
+
+    const text = event.message.text.trim();
+
+    if (
+      text === "選單" ||
+      text === "查看選單"
+    ) {
+      await reply(
+        env,
+        event.replyToken,
+        menuMessage(base)
+      );
+    }
+
+    // 其他一般文字不自動回覆。
+    // 保留給老師真人處理。
+  }
+}
+
+// ========================================
+// LINE Reply API
+// ========================================
+
+async function reply(env, replyToken, messages) {
+  const list = Array.isArray(messages)
+    ? messages
+    : [messages];
+
+  const response = await fetch(
+    "https://api.line.me/v2/bot/message/reply",
+    {
+      method: "POST",
+      headers: {
+        Authorization:
+          "Bearer " + env.LINE_CHANNEL_ACCESS_TOKEN,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        replyToken,
+        messages: list
+      })
+    }
+  );
+
+  if (!response.ok) {
+    console.error(
+      "LINE Reply API failed:",
+      response.status
+    );
+
+    throw new Error("LINE reply failed");
+  }
+}
+
+// ========================================
+// LINE Push API
+// 預留給未來月結 Flex
+// ========================================
+
+async function pushMessage(env, userId, messages) {
+  const list = Array.isArray(messages)
+    ? messages
+    : [messages];
+
+  const response = await fetch(
+    "https://api.line.me/v2/bot/message/push",
+    {
+      method: "POST",
+      headers: {
+        Authorization:
+          "Bearer " + env.LINE_CHANNEL_ACCESS_TOKEN,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        to: userId,
+        messages: list
+      })
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(
+      "LINE Push API failed: " + response.status
+    );
+  }
+}
+
+// ========================================
+// Quick Reply 五顆按鈕
+// ========================================
+
+function quickReply(base) {
+  const buttons = [
+    [
+      "教學經驗",
+      "menu_experience",
+      "teacher"
+    ],
+    [
+      "課程費用",
+      "menu_price",
+      "price"
+    ],
+    [
+      "詢問時段",
+      "menu_availability",
+      "calendar"
+    ],
+    [
+      "上課須知",
+      "menu_policy",
+      "policy"
+    ],
+    [
+      "月結綁定",
+      "bind_monthly_student",
+      "binding"
+    ]
+  ];
+
+  return {
+    items: buttons.map(
+      ([label, data, name]) => ({
+        type: "action",
+
+        imageUrl:
+          `${base}/icons/${name}.png`,
+
+        action: {
+          type: "postback",
+          label,
+          data
+        }
+      })
+    )
+  };
+}
+
+function menuMessage(base) {
+  return {
+    type: "text",
+    text: "您好！請選擇您想查看的資訊。",
+    quickReply: quickReply(base)
+  };
+}
+
+function textMessage(text, base) {
+  return {
+    type: "text",
+    text,
+    quickReply: quickReply(base)
+  };
+}
+
+function bindingInputMessage(text) {
+  return {
+    type: "text",
+    text,
+
+    quickReply: {
+      items: [
+        {
+          type: "action",
+          action: {
+            type: "postback",
+            label: "取消操作",
+            data: "cancel_monthly_binding"
+          }
+        }
+      ]
+    }
+  };
+}
+
+// ========================================
+// Flex Message 共用元件
+// ========================================
+
+function t(text, options = {}) {
+  return {
+    type: "text",
+    text: String(text),
+    size: "sm",
+    color: C.dark,
+    wrap: true,
+    ...options
+  };
+}
+
+function b(contents, options = {}) {
+  return {
+    type: "box",
+    layout: "vertical",
+    contents,
+    ...options
+  };
+}
+
+function r(contents, options = {}) {
+  return {
+    type: "box",
+    layout: "horizontal",
+    alignItems: "center",
+    contents,
+    ...options
+  };
+}
+
+function sep(margin = "md") {
+  return {
+    type: "separator",
+    color: C.line,
+    margin
+  };
+}
+
+function icon(base, name, size = "32px") {
+  return {
+    type: "image",
+    url: `${base}/icons/${name}.png`,
+    size,
+    aspectRatio: "1:1",
+    aspectMode: "fit",
+    flex: 0
+  };
+}
+
+function heading(base, name, title, subtitle) {
+  return r(
+    [
+      icon(base, name),
+
+      b(
+        [
+          t(title, {
+            weight: "bold",
+            size: "xl",
+            color: C.deep
+          }),
+
+          t(subtitle, {
+            size: "xs",
+            color: C.muted
+          })
+        ],
+        {
+          spacing: "xs"
+        }
+      )
+    ],
+    {
+      spacing: "md"
+    }
+  );
+}
+
+function sectionTitle(title) {
+  return t(title, {
+    color: C.green,
+    weight: "bold",
+    size: "md"
+  });
+}
+
+function bubble(contents) {
+  return {
+    type: "bubble",
+    size: "mega",
+    body: b(contents, {
+      paddingAll: "20px",
+      spacing: "lg",
+      backgroundColor: C.cream
+    })
+  };
+}
+
+function flexMessage(altText, contents, base) {
+  return {
+    type: "flex",
+    altText,
+    contents,
+    quickReply: quickReply(base)
+  };
+}
+
+function money(amount) {
+  return "NT$" +
+    Number(amount).toLocaleString("en-US");
+}
+
+// ========================================
+// 教學經驗
+// ========================================
+
+function experienceFlex(base) {
+  const content = bubble([
+    heading(
+      base,
+      "teacher",
+      "教學經驗",
+      "TEACHING EXPERIENCE"
+    ),
+
+    sep(),
+
+    sectionTitle("關於老師"),
+
+    t(
+      "提供國小及國中一對一家教，依照學生程度、學習需求及個別狀況安排課程。"
+    ),
+
+    sectionTitle("教學成果"),
+
+    resultCard(
+      "國中數學",
+      "20 分 → 70 分"
+    ),
+
+    resultCard(
+      "國中自然",
+      "50 分 → 94 分"
+    ),
+
+    resultCard(
+      "國小數學",
+      "不及格 → 80 分"
+    ),
+
+    resultCard(
+      "國小全科",
+      "班級前六名"
+    ),
+
+    sep(),
+
+    t(
+      "歡迎與老師討論學生目前的學習狀況及課程需求。",
+      {
+        color: C.muted,
+        size: "xs"
+      }
+    )
+  ]);
+
+  return flexMessage(
+    "教學經驗與教學成果",
+    content,
+    base
+  );
+}
+
+function resultCard(subject, result) {
+  return b(
+    [
+      t(subject, {
+        size: "xs",
+        color: C.muted
+      }),
+
+      t(result, {
+        color: C.green,
+        weight: "bold",
+        size: "xl"
+      })
+    ],
+    {
+      backgroundColor: C.mint,
+      cornerRadius: "12px",
+      paddingAll: "14px",
+      spacing: "sm"
+    }
+  );
+}
+
+// ========================================
+// 課程費用
+// ========================================
+
+function priceFlex(base) {
+  return flexMessage(
+    "課程費用與收費方案",
+
+    {
+      type: "carousel",
+
+      contents: [
+        priceBubble(
+          base,
+          PRICES.junior
+        ),
+
+        priceBubble(
+          base,
+          PRICES.elementary
+        )
+      ]
+    },
+
+    base
+  );
+}
+
+function priceBubble(base, plan) {
+  return bubble([
+    heading(
+      base,
+      "price",
+      plan.title + "課程費用",
+      plan.subtitle
+    ),
+
+    sep(),
+
+    priceSection(
+      base,
+      "home",
+      "到府教學",
+      plan.onsite
+    ),
+
+    sep(),
+
+    priceSection(
+      base,
+      "laptop",
+      "線上教學",
+      plan.online
+    ),
+
+    b(
+      [
+        sectionTitle("收費說明"),
+
+        t(
+          "單堂：依當次上課時數計算，下課後支付。"
+        ),
+
+        t(
+          "月收：依當月確認課程時數計算，於月初支付。"
+        ),
+
+        t(
+          "實際費用依雙方確認的課程安排為準。",
+          {
+            size: "xs",
+            color: C.muted
+          }
+        )
+      ],
+      {
+        spacing: "sm",
+        paddingAll: "12px",
+        cornerRadius: "12px",
+        backgroundColor: C.mint
+      }
+    )
+  ]);
+}
+
+function priceSection(base, name, title, prices) {
+  return b(
+    [
+      r(
+        [
+          icon(base, name, "26px"),
+          sectionTitle(title)
+        ],
+        {
+          spacing: "sm"
+        }
+      ),
+
+      r([
+        t("單堂時薪", {
+          color: C.muted
+        }),
+
+        t(money(prices[0]), {
+          align: "end",
+          weight: "bold",
+          size: "lg"
+        })
+      ]),
+
+      r([
+        t("月收時薪", {
+          color: C.muted
+        }),
+
+        t(money(prices[1]), {
+          align: "end",
+          weight: "bold",
+          color: C.green,
+          size: "lg"
+        })
+      ])
+    ],
+    {
+      spacing: "md"
+    }
+  );
+}
+
+// ========================================
+// 上課須知
+// ========================================
+
+function policyFlex(base) {
+  return flexMessage(
+    "上課須知",
+
+    bubble([
+      heading(
+        base,
+        "policy",
+        "上課須知",
+        "CLASS POLICY"
+      ),
+
+      sep(),
+
+      sectionTitle("請假與課程異動"),
+
+      t(
+        "若需請假或調整上課時間，請至少提前 24 小時通知老師。"
+      ),
+
+      t(
+        "補課時間須由雙方共同確認，依老師可安排的時段進行。"
+      ),
+
+      sep(),
+
+      sectionTitle("遲到與缺席"),
+
+      t(
+        "如遇遲到或缺席，請主動聯繫老師，相關課程費用依雙方約定的教學合作規範辦理。"
+      ),
+
+      sep(),
+
+      sectionTitle("課程費用"),
+
+      t(
+        "單堂課程於下課後支付；月收課程依當月確認時數，於月初支付。"
+      ),
+
+      b(
+        [
+          t(
+            "如有特殊狀況，歡迎提前與老師討論。",
+            {
+              size: "xs",
+              color: C.green
+            }
+          )
+        ],
+        {
+          backgroundColor: C.mint,
+          paddingAll: "12px",
+          cornerRadius: "10px"
+        }
+      )
+    ]),
+
+    base
+  );
+}
+
+// ========================================
+// Firebase 公開空堂
+// ========================================
+
+function firestoreBase(env) {
+  const projectId =
+    env.FIREBASE_PROJECT_ID || PROJECT_ID;
+
+  return (
+    "https://firestore.googleapis.com/v1/projects/" +
+    encodeURIComponent(projectId) +
+    "/databases/" + encodeURIComponent(env.FIRESTORE_DATABASE_ID || "(default)") +
+    "/documents"
+  );
+}
+
+function teacherUid(env) {
+  const uid = env.TUTORFLOW_TEACHER_UID || env.TEACHER_UID;
+
+  if (
+    !uid ||
+    !/^[A-Za-z0-9_-]{5,128}$/.test(uid)
+  ) {
+    throw new Error(
+      "Missing or invalid teacher UID"
+    );
+  }
+
+  return uid;
+}
+
+function decodeFirestoreValue(value) {
+  if (!value) return null;
+
+  if ("stringValue" in value) {
+    return value.stringValue;
+  }
+
+  if ("integerValue" in value) {
+    return Number(value.integerValue);
+  }
+
+  if ("doubleValue" in value) {
+    return value.doubleValue;
+  }
+
+  if ("booleanValue" in value) {
+    return value.booleanValue;
+  }
+
+  if ("timestampValue" in value) {
+    return value.timestampValue;
+  }
+
+  if ("nullValue" in value) {
+    return null;
+  }
+
+  if ("arrayValue" in value) {
+    return (
+      value.arrayValue.values || []
+    ).map(decodeFirestoreValue);
+  }
+
+  if ("mapValue" in value) {
+    return decodeFirestoreFields(
+      value.mapValue.fields || {}
+    );
+  }
+
+  return null;
+}
+
+function decodeFirestoreFields(fields) {
+  return Object.fromEntries(
+    Object.entries(fields).map(
+      ([key, value]) => [
+        key,
+        decodeFirestoreValue(value)
+      ]
+    )
+  );
+}
+
+async function fetchAvailability(env) {
+  const uid = teacherUid(env);
+
+  const url =
+    firestoreBase(env) +
+    "/teachers/" +
+    encodeURIComponent(uid) +
+    "/public/publicAvailability";
+
+  const response = await fetch(url);
+
+  if (!response.ok) {
+    throw new Error(
+      "Availability read failed: " +
+      response.status
+    );
+  }
+
+  const doc = await response.json();
+
+  const data = decodeFirestoreFields(
+    doc.fields || {}
+  );
+
+  if (!Array.isArray(data.slots)) {
+    return [];
+  }
+
+  return data.slots;
+}
+
+function taipeiToday() {
+  const parts =
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Taipei",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).formatToParts(new Date());
+
+  const obj = Object.fromEntries(
+    parts.map(part => [
+      part.type,
+      part.value
+    ])
+  );
+
+  return `${obj.year}-${obj.month}-${obj.day}`;
+}
+
+function taipeiTime() {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Taipei",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23"
+  }).format(new Date());
+}
+
+function addDays(date, days) {
+  const value = new Date(
+    date + "T00:00:00Z"
+  );
+
+  value.setUTCDate(
+    value.getUTCDate() + days
+  );
+
+  return value.toISOString().slice(0, 10);
+}
+
+function formatDate(date) {
+  const weekdays = [
+    "日", "一", "二", "三",
+    "四", "五", "六"
+  ];
+
+  const value = new Date(
+    date + "T00:00:00Z"
+  );
+
+  return (
+    date.slice(5).replace("-", "/") +
+    "（" +
+    weekdays[value.getUTCDay()] +
+    "）"
+  );
+}
+
+function normalizeSlots(slots) {
+  const today = taipeiToday();
+  const now = taipeiTime();
+
+  const lastDate = addDays(
+    today,
+    MAX_DAYS - 1
+  );
+
+  const seen = new Set();
+
+  return slots
+    .filter(slot => {
+      if (!slot || typeof slot !== "object") {
+        return false;
+      }
+
+      if (
+        !/^\d{4}-\d{2}-\d{2}$/.test(
+          slot.date || ""
+        )
+      ) return false;
+
+      if (
+        !/^([01]\d|2[0-3]):[0-5]\d$/.test(
+          slot.start || ""
+        )
+      ) return false;
+
+      if (
+        !/^([01]\d|2[0-3]):[0-5]\d$/.test(
+          slot.end || ""
+        )
+      ) return false;
+
+      if (
+        slot.status &&
+        slot.status !== "available"
+      ) return false;
+
+      if (slot.end <= slot.start) {
+        return false;
+      }
+
+      if (
+        slot.date < today ||
+        slot.date > lastDate
+      ) return false;
+
+      if (
+        slot.date === today &&
+        slot.start <= now
+      ) return false;
+
+      const key =
+        slot.date +
+        "_" +
+        slot.start +
+        "_" +
+        slot.end;
+
+      if (seen.has(key)) {
+        return false;
+      }
+
+      seen.add(key);
+
+      return true;
+    })
+    .sort((a, b) => {
+      return (
+        a.date.localeCompare(b.date) ||
+        a.start.localeCompare(b.start)
+      );
+    });
+}
+
+async function handleAvailability(
+  event,
+  env,
+  base
+) {
+  try {
+    const raw = await fetchAvailability(env);
+
+    const slots = normalizeSlots(raw);
+
+    if (!slots.length) {
+      await reply(
+        env,
+        event.replyToken,
+        textMessage(
+          "目前暫無可預約時段，歡迎直接與老師聯繫。",
+          base
+        )
+      );
+
+      return;
+    }
+
+    await reply(
+      env,
+      event.replyToken,
+      availabilityFlex(
+        slots,
+        env,
+        base
+      )
+    );
+
+  } catch (error) {
+    console.error(
+      "Availability error:",
+      error?.message
+    );
+
+    await reply(
+      env,
+      event.replyToken,
+      textMessage(
+        "目前無法取得最新空堂，請稍後再試，或直接與老師聯繫。",
+        base
+      )
+    );
+  }
+}
+
+function bookingUri(env, slot) {
+  const oaId = env.LINE_OA_ID || "";
+
+  const text = [
+    "您好，我想詢問以下課程時段：",
+    "",
+    "日期：" + slot.date,
+    "時間：" + slot.start + "–" + slot.end,
+    "學生年級：",
+    "欲加強科目：",
+    "上課地點："
+  ].join("\n");
+
+  return (
+    "https://line.me/R/oaMessage/" +
+    encodeURIComponent(oaId) +
+    "/?" +
+    encodeURIComponent(text)
+  );
+}
+
+function availabilityFlex(slots, env, base) {
+  const days = new Map();
+
+  for (const slot of slots) {
+    if (!days.has(slot.date)) {
+      days.set(slot.date, []);
+    }
+
+    days.get(slot.date).push(slot);
+  }
+
+  const cards = [];
+
+  for (const [date, items] of days) {
+    const rows = items
+      .slice(0, MAX_TIMES_PER_DAY)
+      .map(slot => {
+        return b(
+          [
+            t(
+              slot.start + " – " + slot.end,
+              {
+                color: C.deep,
+                weight: "bold",
+                align: "center"
+              }
+            )
+          ],
+          {
+            backgroundColor: C.mint,
+            paddingAll: "12px",
+            cornerRadius: "10px",
+
+            action: {
+              type: "uri",
+              label: "詢問此時段",
+              uri: bookingUri(env, slot)
+            }
+          }
+        );
+      });
+
+    cards.push(
+      bubble([
+        heading(
+          base,
+          "calendar",
+          formatDate(date),
+          "AVAILABLE TIME"
+        ),
+
+        sep(),
+
+        ...rows,
+
+        t(
+          "點擊時段即可詢問老師，實際預約以老師確認為準。",
+          {
+            size: "xs",
+            color: C.muted
+          }
+        )
+      ])
+    );
+  }
+
+  return flexMessage(
+    "近期可預約課程時段",
+
+    {
+      type: "carousel",
+      contents: cards.slice(0, 12)
+    },
+
+    base
+  );
+}
+
+// ========================================
+// 月結綁定
+// ========================================
+
+function bindingReady(env) {
+  return Boolean(
+    env.MONTHLY_BINDINGS &&
+    env.TUTORFLOW_TEACHER_UID &&
+    env.FIREBASE_SERVICE_ACCOUNT
+  );
+}
+
+function stateKey(env, userId) {
+  return (
+    "monthly:state:" +
+    teacherUid(env) +
+    ":" +
+    userId
+  );
+}
+
+function parentKey(env, userId) {
+  return (
+    "monthly:parent:" +
+    teacherUid(env) +
+    ":" +
+    userId
+  );
+}
+
+function studentKey(env, studentId) {
+  return (
+    "monthly:student:" +
+    teacherUid(env) +
+    ":" +
+    studentId
+  );
+}
+
+function getUserId(event) {
+  if (event.source?.type !== "user") {
+    return null;
+  }
+
+  const id = event.source?.userId;
+
+  return typeof id === "string"
+    ? id
+    : null;
+}
+
+async function startMonthlyBinding(
+  event,
+  env,
+  base
+) {
+  const userId = getUserId(event);
+
+  if (!userId) {
+    await reply(
+      env,
+      event.replyToken,
+      textMessage(
+        "請在官方帳號的一對一聊天室使用月結綁定。",
+        base
+      )
+    );
+
+    return;
+  }
+
+  if (!bindingReady(env)) {
+    await reply(
+      env,
+      event.replyToken,
+      textMessage(
+        "月結綁定功能目前尚未開放，請與老師聯繫。",
+        base
+      )
+    );
+
+    return;
+  }
+
+  const existing =
+    await env.MONTHLY_BINDINGS.get(
+      parentKey(env, userId),
+      "json"
+    );
+
+  if (existing?.studentId) {
+    await reply(
+      env,
+      event.replyToken,
+      textMessage(
+        "您已完成月結綁定，無須重複操作。如需更換綁定學生，請與老師聯繫。",
+        base
+      )
+    );
+
+    return;
+  }
+
+  await env.MONTHLY_BINDINGS.put(
+    stateKey(env, userId),
+
+    JSON.stringify({
+      action: "awaiting_student_name",
+      createdAt: Date.now(),
+      attempts: 0
+    }),
+
+    {
+      expirationTtl: BINDING_TTL
+    }
+  );
+
+  await reply(
+    env,
+    event.replyToken,
+
+    bindingInputMessage(
+      "📋 月結課程綁定\n\n" +
+      "此功能提供月結制學生家長使用，方便日後接收每月課程安排與費用通知。\n\n" +
+      "請輸入學生姓名（兩個中文字）。"
+    )
+  );
+}
+
+async function cancelMonthlyBinding(
+  event,
+  env,
+  base
+) {
+  const userId = getUserId(event);
+
+  if (
+    userId &&
+    env.MONTHLY_BINDINGS &&
+    env.TUTORFLOW_TEACHER_UID
+  ) {
+    await env.MONTHLY_BINDINGS.delete(
+      stateKey(env, userId)
+    );
+  }
+
+  await reply(
+    env,
+    event.replyToken,
+    textMessage(
+      "已取消本次綁定操作。",
+      base
+    )
+  );
+}
+
+async function handleBindingText(
+  event,
+  env,
+  base
+) {
+  if (!bindingReady(env)) {
+    return false;
+  }
+
+  const userId = getUserId(event);
+
+  if (!userId) {
+    return false;
+  }
+
+  const key = stateKey(env, userId);
+
+  const state =
+    await env.MONTHLY_BINDINGS.get(
+      key,
+      "json"
+    );
+
+  if (
+    !state ||
+    state.action !== "awaiting_student_name"
+  ) {
+    return false;
+  }
+
+  const name =
+    event.message.text.trim();
+
+  if (
+    name === "取消" ||
+    name === "取消操作"
+  ) {
+    await cancelMonthlyBinding(
+      event,
+      env,
+      base
+    );
+
+    return true;
+  }
+
+  if (
+    Date.now() - state.createdAt >
+    BINDING_TTL * 1000
+  ) {
+    await env.MONTHLY_BINDINGS.delete(key);
+
+    await reply(
+      env,
+      event.replyToken,
+      textMessage(
+        "本次綁定操作已逾時，請重新點選月結綁定。",
+        base
+      )
+    );
+
+    return true;
+  }
+
+  if (!/^\p{Script=Han}{2}$/u.test(name)) {
+    await reply(
+      env,
+      event.replyToken,
+
+      bindingInputMessage(
+        "請輸入兩個中文字的學生姓名，或點擊取消操作。"
+      )
+    );
+
+    return true;
+  }
+
+  if (Number(state.attempts || 0) >= 5) {
+    await env.MONTHLY_BINDINGS.delete(key);
+
+    await reply(
+      env,
+      event.replyToken,
+      textMessage(
+        "查詢次數已達上限，請與老師聯繫。",
+        base
+      )
+    );
+
+    return true;
+  }
+
+  try {
+    const matches =
+      await findStudentsByExactName(
+        env,
+        name
+      );
+
+    if (matches.length === 0) {
+      const remaining = Math.max(
+        60,
+        Math.ceil(
+          (
+            state.createdAt +
+            BINDING_TTL * 1000 -
+            Date.now()
+          ) / 1000
+        )
+      );
+
+      await env.MONTHLY_BINDINGS.put(
+        key,
+
+        JSON.stringify({
+          ...state,
+          attempts:
+            Number(state.attempts || 0) + 1
+        }),
+
+        {
+          expirationTtl: remaining
+        }
+      );
+
+      await reply(
+        env,
+        event.replyToken,
+
+        bindingInputMessage(
+          "查無符合的學生資料，請確認姓名後重新輸入。"
+        )
+      );
+
+      return true;
+    }
+
+    if (matches.length !== 1) {
+      await env.MONTHLY_BINDINGS.delete(key);
+
+      await reply(
+        env,
+        event.replyToken,
+
+        textMessage(
+          "目前無法確認學生資料，請與老師聯繫。",
+          base
+        )
+      );
+
+      return true;
+    }
+
+    const student = matches[0];
+
+    const result =
+      await saveStudentBinding(
+        env,
+        student.id,
+        userId
+      );
+
+    await env.MONTHLY_BINDINGS.delete(key);
+
+    if (result === "conflict") {
+      await reply(
+        env,
+        event.replyToken,
+
+        textMessage(
+          "目前無法完成綁定，請與老師聯繫。",
+          base
+        )
+      );
+
+      return true;
+    }
+
+    if (result === "existing") {
+      await reply(
+        env,
+        event.replyToken,
+
+        textMessage(
+          "您已完成月結綁定，無須重複操作。",
+          base
+        )
+      );
+
+      return true;
+    }
+
+    await reply(
+      env,
+      event.replyToken,
+
+      textMessage(
+        "✅ 月結綁定成功！\n\n" +
+        "已成功建立學生資料關聯。\n\n" +
+        "日後老師將透過此 LINE 官方帳號發送每月課程安排、確認通知及月結費用資訊。",
+        base
+      )
+    );
+
+    return true;
+
+  } catch (error) {
+    console.error(
+      "Monthly binding failed:",
+      error?.name || "Error"
+    );
+
+    await reply(
+      env,
+      event.replyToken,
+
+      bindingInputMessage(
+        "目前暫時無法完成綁定，請稍後再試。"
+      )
+    );
+
+    return true;
+  }
+}
+
+// ========================================
+// 儲存學生與 LINE 帳號關聯
+// ========================================
+
+async function saveStudentBinding(
+  env,
+  studentId,
+  userId
+) {
+  const pKey = parentKey(env, userId);
+  const sKey = studentKey(env, studentId);
+
+  const [parent, student] =
+    await Promise.all([
+      env.MONTHLY_BINDINGS.get(
+        pKey,
+        "json"
+      ),
+
+      env.MONTHLY_BINDINGS.get(
+        sKey,
+        "json"
+      )
+    ]);
+
+  if (
+    parent &&
+    parent.studentId !== studentId
+  ) {
+    return "conflict";
+  }
+
+  if (
+    student &&
+    student.lineUserId !== userId
+  ) {
+    return "conflict";
+  }
+
+  if (
+    parent?.studentId === studentId &&
+    student?.lineUserId === userId
+  ) {
+    return "existing";
+  }
+
+  const binding = {
+    teacherUid: teacherUid(env),
+    studentId,
+    lineUserId: userId,
+    status: "active",
+    boundAt:
+      student?.boundAt ||
+      parent?.boundAt ||
+      new Date().toISOString()
+  };
+
+  await env.MONTHLY_BINDINGS.put(
+    sKey,
+    JSON.stringify(binding)
+  );
+
+  await env.MONTHLY_BINDINGS.put(
+    pKey,
+    JSON.stringify(binding)
+  );
+
+  return "created";
+}
+
+// 未來月結功能使用。
+// 依學生 ID 找出應傳送的家長。
+async function getBoundParent(
+  env,
+  studentId
+) {
+  const binding =
+    await env.MONTHLY_BINDINGS.get(
+      studentKey(env, studentId),
+      "json"
+    );
+
+  if (
+    !binding ||
+    binding.status !== "active"
+  ) {
+    return null;
+  }
+
+  return binding.lineUserId || null;
+}
+
+// ========================================
+// Firebase Service Account OAuth
+// ========================================
+
+let firebaseTokenCache = null;
+
+function base64Url(bytes) {
+  let binary = "";
+
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+
+  return btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function encodeJwtObject(obj) {
+  return base64Url(
+    new TextEncoder().encode(
+      JSON.stringify(obj)
+    )
+  );
+}
+
+function pemToArrayBuffer(pem) {
+  const normalized = pem
+    .replace(/\\n/g, "\n")
+    .replace(
+      /-----BEGIN PRIVATE KEY-----/g,
+      ""
+    )
+    .replace(
+      /-----END PRIVATE KEY-----/g,
+      ""
+    )
+    .replace(/\s/g, "");
+
+  return Uint8Array.from(
+    atob(normalized),
+    char => char.charCodeAt(0)
+  ).buffer;
+}
+
+async function firebaseAccessToken(env) {
+  if (!env.FIREBASE_SERVICE_ACCOUNT) {
+    throw new Error(
+      "Missing Firebase service account"
+    );
+  }
+
+  let account;
+
+  try {
+    account = JSON.parse(
+      env.FIREBASE_SERVICE_ACCOUNT
+    );
+  } catch {
+    throw new Error(
+      "Invalid service account JSON"
+    );
+  }
+
+  if (
+    !account.client_email ||
+    !account.private_key
+  ) {
+    throw new Error(
+      "Invalid service account credentials"
+    );
+  }
+
+  const expectedProject =
+    env.FIREBASE_PROJECT_ID ||
+    PROJECT_ID;
+
+  if (
+    account.project_id &&
+    account.project_id !== expectedProject
+  ) {
+    throw new Error(
+      "Firebase project mismatch"
+    );
+  }
+
+  if (
+    firebaseTokenCache &&
+    firebaseTokenCache.email ===
+      account.client_email &&
+    firebaseTokenCache.expiresAt >
+      Date.now() + 60000
+  ) {
+    return firebaseTokenCache.accessToken;
+  }
+
+  const now = Math.floor(
+    Date.now() / 1000
+  );
+
+  const tokenUri =
+    "https://oauth2.googleapis.com/token";
+
+  const header = encodeJwtObject({
+    alg: "RS256",
+    typ: "JWT"
+  });
+
+  const claims = encodeJwtObject({
+    iss: account.client_email,
+
+    scope:
+      "https://www.googleapis.com/auth/datastore",
+
+    aud: tokenUri,
+
+    iat: now,
+
+    exp: now + 3600
+  });
+
+  const unsigned =
+    header + "." + claims;
+
+  const key =
+    await crypto.subtle.importKey(
+      "pkcs8",
+
+      pemToArrayBuffer(
+        account.private_key
+      ),
+
+      {
+        name: "RSASSA-PKCS1-v1_5",
+        hash: "SHA-256"
+      },
+
+      false,
+
+      ["sign"]
+    );
+
+  const signature =
+    await crypto.subtle.sign(
+      "RSASSA-PKCS1-v1_5",
+      key,
+
+      new TextEncoder().encode(
+        unsigned
+      )
+    );
+
+  const assertion =
+    unsigned +
+    "." +
+    base64Url(
+      new Uint8Array(signature)
+    );
+
+  const response = await fetch(
+    tokenUri,
+
+    {
+      method: "POST",
+
+      headers: {
+        "Content-Type":
+          "application/x-www-form-urlencoded"
+      },
+
+      body: new URLSearchParams({
+        grant_type:
+          "urn:ietf:params:oauth:grant-type:jwt-bearer",
+
+        assertion
+      })
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(
+      "Google OAuth failed: " +
+      response.status
+    );
+  }
+
+  const token = await response.json();
+
+  if (!token.access_token) {
+    throw new Error(
+      "Missing Google access token"
+    );
+  }
+
+  firebaseTokenCache = {
+    email: account.client_email,
+
+    accessToken: token.access_token,
+
+    expiresAt:
+      Date.now() +
+      Number(token.expires_in || 3600) *
+        1000
+  };
+
+  return token.access_token;
+}
+
+// ========================================
+// 查詢 TutorFlow 學生索引
+// ========================================
+
+async function findStudentsByExactName(
+  env,
+  name
+) {
+  const accessToken =
+    await firebaseAccessToken(env);
+
+  const uid = teacherUid(env);
+
+  const endpoint =
+    firestoreBase(env) +
+    "/teachers/" +
+    encodeURIComponent(uid) +
+    ":runQuery";
+
+  const response = await fetch(
+    endpoint,
+
+    {
+      method: "POST",
+
+      headers: {
+        Authorization:
+          "Bearer " + accessToken,
+
+        "Content-Type":
+          "application/json"
+      },
+
+      body: JSON.stringify({
+        structuredQuery: {
+          from: [
+            {
+              collectionId:
+                "studentBindingIndex"
+            }
+          ],
+
+          where: {
+            fieldFilter: {
+              field: {
+                fieldPath: "name"
+              },
+
+              op: "EQUAL",
+
+              value: {
+                stringValue: name
+              }
+            }
+          },
+
+          limit: 10
+        }
+      })
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(
+      "Firestore student query failed: " +
+      response.status
+    );
+  }
+
+  const results = await response.json();
+
+  const matches = [];
+
+  for (const item of results) {
+    const doc = item.document;
+
+    if (!doc) continue;
+
+    const data =
+      decodeFirestoreFields(
+        doc.fields || {}
+      );
+
+    if (
+      data.name !== name ||
+      data.active !== true
+    ) {
+      continue;
+    }
+
+    matches.push({
+      id: doc.name.split("/").pop()
+    });
+  }
+
+  return matches;
+}
+
+// ========================================
+// 幾何 PNG 圖示
+// ========================================
 
 function iconPNG(name) {
   const W = 96;
   const H = 96;
 
-  const pixels = new Uint8Array(W * H * 4);
+  const pixels =
+    new Uint8Array(W * H * 4);
+
   const rgb = [23, 107, 83];
 
   function dot(x, y, radius = 2.7) {
     for (
-      let j = Math.max(0, Math.floor(y - radius));
-      j <= Math.min(H - 1, Math.ceil(y + radius));
+      let j = Math.max(
+        0,
+        Math.floor(y - radius)
+      );
+
+      j <= Math.min(
+        H - 1,
+        Math.ceil(y + radius)
+      );
+
       j++
     ) {
       for (
-        let i = Math.max(0, Math.floor(x - radius));
-        i <= Math.min(W - 1, Math.ceil(x + radius));
+        let i = Math.max(
+          0,
+          Math.floor(x - radius)
+        );
+
+        i <= Math.min(
+          W - 1,
+          Math.ceil(x + radius)
+        );
+
         i++
       ) {
-        const distance =
-          (i - x) ** 2 + (j - y) ** 2;
-
-        if (distance <= radius * radius) {
-          const k = (j * W + i) * 4;
+        if (
+          (i - x) ** 2 +
+          (j - y) ** 2 <=
+          radius ** 2
+        ) {
+          const k =
+            (j * W + i) * 4;
 
           pixels[k] = rgb[0];
           pixels[k + 1] = rgb[1];
@@ -240,46 +2072,61 @@ function iconPNG(name) {
   }
 
   function line(x, y, a, b, radius = 2.7) {
-    const steps = Math.max(
+    const n = Math.max(
       1,
-      Math.ceil(Math.hypot(a - x, b - y) * 2)
+      Math.ceil(
+        Math.hypot(a - x, b - y) * 2
+      )
     );
 
-    for (let i = 0; i <= steps; i++) {
+    for (let i = 0; i <= n; i++) {
       dot(
-        x + (a - x) * i / steps,
-        y + (b - y) * i / steps,
+        x + (a - x) * i / n,
+        y + (b - y) * i / n,
         radius
       );
     }
   }
 
-  function path(points, closed = false) {
-    for (let i = 1; i < points.length; i++) {
-      line(...points[i - 1], ...points[i]);
+  function path(points, close = false) {
+    for (
+      let i = 1;
+      i < points.length;
+      i++
+    ) {
+      line(
+        ...points[i - 1],
+        ...points[i]
+      );
     }
 
-    if (closed) {
-      line(...points.at(-1), ...points[0]);
+    if (close) {
+      line(
+        ...points.at(-1),
+        ...points[0]
+      );
     }
   }
 
   function rect(x, y, w, h) {
-    path([
-      [x, y],
-      [x + w, y],
-      [x + w, y + h],
-      [x, y + h]
-    ], true);
+    path(
+      [
+        [x, y],
+        [x + w, y],
+        [x + w, y + h],
+        [x, y + h]
+      ],
+      true
+    );
   }
 
-  function circle(x, y, radius) {
+  function circ(x, y, radius) {
     for (let i = 0; i < 120; i++) {
-      const angle = i * Math.PI / 60;
+      const a = i * Math.PI / 60;
 
       dot(
-        x + Math.cos(angle) * radius,
-        y + Math.sin(angle) * radius,
+        x + Math.cos(a) * radius,
+        y + Math.sin(a) * radius,
         2.5
       );
     }
@@ -287,10 +2134,11 @@ function iconPNG(name) {
 
   if (name === "teacher") {
     rect(13, 17, 70, 48);
+
     line(25, 31, 44, 31);
     line(25, 42, 38, 42);
 
-    circle(65, 37, 8);
+    circ(65, 37, 8);
 
     path([
       [48, 60],
@@ -305,16 +2153,19 @@ function iconPNG(name) {
   }
 
   if (name === "price") {
-    path([
-      [17, 38],
-      [43, 16],
-      [78, 16],
-      [78, 48],
-      [51, 79],
-      [17, 47]
-    ], true);
+    path(
+      [
+        [17, 38],
+        [43, 16],
+        [78, 16],
+        [78, 48],
+        [51, 79],
+        [17, 47]
+      ],
+      true
+    );
 
-    circle(65, 29, 5);
+    circ(65, 29, 5);
 
     line(34, 46, 55, 46);
     line(34, 58, 49, 58);
@@ -322,6 +2173,7 @@ function iconPNG(name) {
 
   if (name === "calendar") {
     rect(15, 24, 66, 57);
+
     line(15, 41, 81, 41);
     line(31, 16, 31, 31);
     line(65, 16, 65, 31);
@@ -363,58 +2215,84 @@ function iconPNG(name) {
   if (name === "laptop") {
     rect(19, 20, 58, 42);
 
-    path([
-      [19, 62],
-      [11, 77],
-      [85, 77],
-      [77, 62]
-    ], true);
+    path(
+      [
+        [19, 62],
+        [11, 77],
+        [85, 77],
+        [77, 62]
+      ],
+      true
+    );
 
     line(35, 69, 61, 69);
+  }
+
+  if (name === "binding") {
+    rect(15, 20, 66, 57);
+
+    circ(36, 38, 9);
+
+    path([
+      [21, 64],
+      [26, 54],
+      [46, 54],
+      [50, 64]
+    ]);
+
+    path([
+      [57, 48],
+      [63, 54],
+      [73, 41]
+    ]);
   }
 
   return makePNG(pixels, W, H);
 }
 
-// =====================================
+// ========================================
 // PNG 編碼器
-// =====================================
+// ========================================
 
-function makePNG(rgba, width, height) {
+function makePNG(rgba, w, h) {
   const raw = new Uint8Array(
-    height * (width * 4 + 1)
+    h * (w * 4 + 1)
   );
 
-  for (let y = 0; y < height; y++) {
+  for (let y = 0; y < h; y++) {
     raw.set(
       rgba.subarray(
-        y * width * 4,
-        (y + 1) * width * 4
+        y * w * 4,
+        (y + 1) * w * 4
       ),
-      y * (width * 4 + 1) + 1
+
+      y * (w * 4 + 1) + 1
     );
   }
 
   let a = 1;
   let b = 0;
 
-  for (const byte of raw) {
-    a = (a + byte) % 65521;
+  for (const value of raw) {
+    a = (a + value) % 65521;
     b = (b + a) % 65521;
   }
 
-  const adler = ((b << 16) | a) >>> 0;
-  const compressed = [120, 1];
+  const adler =
+    ((b << 16) | a) >>> 0;
 
-  for (let offset = 0; offset < raw.length;) {
+  const z = [120, 1];
+
+  for (let o = 0; o < raw.length;) {
     const n = Math.min(
       65535,
-      raw.length - offset
+      raw.length - o
     );
 
-    const last = offset + n >= raw.length;
+    const last =
+      o + n >= raw.length;
 
-    compressed.push(
+    z.push(
       last ? 1 : 0,
       n & 255,
       n >> 8,
@@ -422,14 +2300,14 @@ function makePNG(rgba, width, height) {
       ((~n) >> 8) & 255
     );
 
-    for (let i = 0; i < n; i++) {
-      compressed.push(raw[offset + i]);
+    for (let j = 0; j < n; j++) {
+      z.push(raw[o + j]);
     }
 
-    offset += n;
+    o += n;
   }
 
-  compressed.push(
+  z.push(
     adler >>> 24,
     (adler >>> 16) & 255,
     (adler >>> 8) & 255,
@@ -443,19 +2321,26 @@ function makePNG(rgba, width, height) {
     n & 255
   ];
 
-  function crc32(bytes) {
-    let crc = 0xffffffff;
+  function crc(bytes) {
+    let value = 0xffffffff;
 
     for (const byte of bytes) {
-      crc ^= byte;
+      value ^= byte;
 
-      for (let i = 0; i < 8; i++) {
-        crc = (crc >>> 1) ^
-          ((crc & 1) ? 0xedb88320 : 0);
+      for (let j = 0; j < 8; j++) {
+        value =
+          (value >>> 1) ^
+          (
+            (value & 1)
+              ? 0xedb88320
+              : 0
+          );
       }
     }
 
-    return (crc ^ 0xffffffff) >>> 0;
+    return (
+      value ^ 0xffffffff
+    ) >>> 0;
   }
 
   function chunk(type, data) {
@@ -467,667 +2352,1153 @@ function makePNG(rgba, width, height) {
     return [
       ...u32(data.length),
       ...content,
-      ...u32(crc32(content))
+      ...u32(crc(content))
     ];
   }
 
   return new Uint8Array([
-    137, 80, 78, 71, 13, 10, 26, 10,
+    137, 80, 78, 71,
+    13, 10, 26, 10,
 
-    ...chunk("IHDR", [
-      ...u32(width),
-      ...u32(height),
-      8, 6, 0, 0, 0
-    ]),
+    ...chunk(
+      "IHDR",
+      [
+        ...u32(w),
+        ...u32(h),
+        8, 6, 0, 0, 0
+      ]
+    ),
 
-    ...chunk("IDAT", compressed),
+    ...chunk("IDAT", z),
+
     ...chunk("IEND", [])
   ]);
 }
 
-// =====================================
-// LINE Flex 共用元件
-// =====================================
+// ========================================
+// Rich Menu 管理頁
+// ========================================
 
-const t = (text, options = {}) => ({
-  type: "text",
-  text: String(text),
-  size: "sm",
-  color: C.dark,
-  wrap: true,
-  ...options
-});
+function adminPage() {
+  const html = `<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport"
+      content="width=device-width, initial-scale=1">
+<meta name="robots"
+      content="noindex,nofollow">
 
-const b = (contents, options = {}) => ({
-  type: "box",
-  layout: "vertical",
-  contents,
-  ...options
-});
+<title>TutorFlow 圖文選單管理</title>
 
-const r = (contents, options = {}) => ({
-  type: "box",
-  layout: "horizontal",
-  contents,
-  alignItems: "center",
-  ...options
-});
+<style>
+* {
+  box-sizing: border-box;
+}
 
-const sep = (margin = "md") => ({
-  type: "separator",
-  color: C.line,
-  margin
-});
+body {
+  font-family: system-ui, sans-serif;
+  background: #f5f8f5;
+  color: #273b45;
+  margin: 0;
+  padding: 24px;
+}
 
-const dollars = n =>
-  "$" + n.toLocaleString("en-US");
+main {
+  max-width: 580px;
+  margin: 30px auto;
+  background: white;
+  border: 1px solid #e5ece7;
+  border-radius: 20px;
+  padding: 28px;
+}
 
-const icon = (base, name, size = "30px") => ({
-  type: "image",
-  url: `${base}/icons/${name}.png`,
-  size,
-  aspectRatio: "1:1",
-  aspectMode: "fit",
-  flex: 0
-});
+h1 {
+  color: #155542;
+  font-size: 23px;
+}
 
-// =====================================
-// Quick Reply
-// 全部使用 Postback
-// =====================================
+p {
+  color: #687889;
+  font-size: 14px;
+  line-height: 1.8;
+}
 
-function quickReply(base) {
-  const buttons = [
-    ["教學經驗", "menu_experience", "teacher"],
-    ["課程費用", "menu_price", "price"],
-    ["詢問時段", "menu_availability", "calendar"],
-    ["上課須知", "menu_policy", "policy"]
+label {
+  display: block;
+  margin: 22px 0 8px;
+  font-weight: 600;
+}
+
+input {
+  width: 100%;
+  padding: 13px;
+  border: 1px solid #c8d7cd;
+  border-radius: 10px;
+}
+
+button {
+  width: 100%;
+  background: #176b53;
+  color: white;
+  border: 0;
+  border-radius: 10px;
+  padding: 14px;
+  margin-top: 24px;
+  cursor: pointer;
+}
+
+pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: #eaf4ed;
+  padding: 14px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+</style>
+</head>
+
+<body>
+<main>
+
+<h1>單一圖文選單管理</h1>
+
+<p>
+保留原本的「查看選單」圖片。
+家長點擊後，Worker 將回覆五個 Quick Reply。
+</p>
+
+<form id="form">
+
+<label>管理密鑰</label>
+
+<input
+  id="secret"
+  type="password"
+  autocomplete="off"
+  required
+>
+
+<label>上傳圖文選單 PNG</label>
+
+<input
+  id="file"
+  type="file"
+  accept="image/png"
+  required
+>
+
+<p>
+圖片上限 1 MB，寬度 800–2500 px，
+高度至少 250 px，寬高比至少 1.45。
+</p>
+
+<button id="submit">
+上傳並啟用圖文選單
+</button>
+
+</form>
+
+<pre id="result" hidden></pre>
+
+</main>
+
+<script>
+const form =
+  document.getElementById("form");
+
+const result =
+  document.getElementById("result");
+
+const button =
+  document.getElementById("submit");
+
+form.addEventListener(
+  "submit",
+
+  async event => {
+    event.preventDefault();
+
+    const file =
+      document.getElementById("file")
+        .files[0];
+
+    if (!file) return;
+
+    result.hidden = false;
+
+    if (file.size > 1048576) {
+      result.textContent =
+        "圖片不可超過 1 MB。";
+      return;
+    }
+
+    button.disabled = true;
+
+    result.textContent =
+      "正在設定圖文選單...";
+
+    try {
+      const data = new FormData();
+
+      data.append(
+        "image",
+        file,
+        file.name
+      );
+
+      const response = await fetch(
+        "/admin/richmenu/install",
+
+        {
+          method: "POST",
+
+          headers: {
+            Authorization:
+              "Bearer " +
+              document.getElementById(
+                "secret"
+              ).value
+          },
+
+          body: data,
+
+          cache: "no-store"
+        }
+      );
+
+      const json =
+        await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          json.error || "設定失敗"
+        );
+      }
+
+      result.textContent =
+        "成功啟用！\\nRich Menu ID：" +
+        json.richMenuId;
+
+    } catch (error) {
+      result.textContent =
+        "設定失敗：" + error.message;
+
+    } finally {
+      button.disabled = false;
+    }
+  }
+);
+</script>
+
+</body>
+</html>`;
+
+  return new Response(html, {
+    headers: {
+      "Content-Type":
+        "text/html; charset=utf-8",
+
+      "Cache-Control":
+        "no-store",
+
+      "X-Content-Type-Options":
+        "nosniff",
+
+      "X-Frame-Options":
+        "DENY",
+
+      "Referrer-Policy":
+        "no-referrer",
+
+      "Content-Security-Policy":
+        "default-src 'none'; " +
+        "script-src 'unsafe-inline'; " +
+        "style-src 'unsafe-inline'; " +
+        "connect-src 'self'; " +
+        "form-action 'self'; " +
+        "base-uri 'none'"
+    }
+  });
+}
+
+// ========================================
+// 管理員密鑰驗證
+// ========================================
+
+async function verifyAdmin(request, expected) {
+  const token = (
+    request.headers.get(
+      "authorization"
+    ) || ""
+  ).replace(/^Bearer\s+/i, "");
+
+  if (
+    !expected ||
+    !token ||
+    token.length > 512
+  ) {
+    return false;
+  }
+
+  const encoder =
+    new TextEncoder();
+
+  const [a, b] = await Promise.all([
+    crypto.subtle.digest(
+      "SHA-256",
+      encoder.encode(token)
+    ),
+
+    crypto.subtle.digest(
+      "SHA-256",
+      encoder.encode(expected)
+    )
+  ]);
+
+  const x = new Uint8Array(a);
+  const y = new Uint8Array(b);
+
+  let diff = 0;
+
+  for (let i = 0; i < x.length; i++) {
+    diff |= x[i] ^ y[i];
+  }
+
+  return diff === 0;
+}
+
+function jsonReply(body, status = 200) {
+  return new Response(
+    JSON.stringify(body),
+
+    {
+      status,
+
+      headers: {
+        "Content-Type":
+          "application/json; charset=utf-8",
+
+        "Cache-Control":
+          "no-store",
+
+        "X-Content-Type-Options":
+          "nosniff"
+      }
+    }
+  );
+}
+
+// ========================================
+// Rich Menu API
+// ========================================
+
+async function lineAdminFetch(
+  path,
+  token,
+  options = {},
+  dataDomain = false
+) {
+  const base = dataDomain
+    ? "https://api-data.line.me"
+    : "https://api.line.me";
+
+  const response = await fetch(
+    base + path,
+
+    {
+      ...options,
+
+      headers: {
+        Authorization:
+          "Bearer " + token,
+
+        ...(options.headers || {})
+      }
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(
+      "LINE API failed: " +
+      response.status
+    );
+  }
+
+  if (response.status === 204) {
+    return {};
+  }
+
+  const text =
+    await response.text();
+
+  return text
+    ? JSON.parse(text)
+    : {};
+}
+
+async function installRichMenu(
+  request,
+  env
+) {
+  if (!env.RICHMENU_ADMIN_KEY) {
+    return jsonReply(
+      {
+        error:
+          "尚未設定 RICHMENU_ADMIN_KEY。"
+      },
+      503
+    );
+  }
+
+  if (
+    !await verifyAdmin(
+      request,
+      env.RICHMENU_ADMIN_KEY
+    )
+  ) {
+    return jsonReply(
+      {
+        error: "管理密鑰錯誤。"
+      },
+      401
+    );
+  }
+
+  if (!env.LINE_CHANNEL_ACCESS_TOKEN) {
+    return jsonReply(
+      {
+        error:
+          "缺少 LINE Access Token。"
+      },
+      503
+    );
+  }
+
+  const type =
+    request.headers.get(
+      "content-type"
+    ) || "";
+
+  if (
+    !type.startsWith(
+      "multipart/form-data"
+    )
+  ) {
+    return jsonReply(
+      {
+        error: "請上傳 PNG 圖片。"
+      },
+      415
+    );
+  }
+
+  const length = Number(
+    request.headers.get(
+      "content-length"
+    ) || 0
+  );
+
+  if (length > 1400000) {
+    return jsonReply(
+      {
+        error: "上傳內容過大。"
+      },
+      413
+    );
+  }
+
+  let file;
+
+  try {
+    const form =
+      await request.formData();
+
+    file = form.get("image");
+
+  } catch {
+    return jsonReply(
+      {
+        error: "上傳格式不正確。"
+      },
+      400
+    );
+  }
+
+  if (
+    !file ||
+    typeof file.arrayBuffer !==
+      "function" ||
+    file.size < 24 ||
+    file.size > 1048576
+  ) {
+    return jsonReply(
+      {
+        error: "請選擇有效的 PNG 圖片。"
+      },
+      400
+    );
+  }
+
+  const bytes = new Uint8Array(
+    await file.arrayBuffer()
+  );
+
+  const pngSig = [
+    137, 80, 78, 71,
+    13, 10, 26, 10
   ];
 
-  return {
-    items: buttons.map(([label, data, name]) => ({
-      type: "action",
-      imageUrl: `${base}/icons/${name}.png`,
-      action: {
-        type: "postback",
-        label,
-        data
+  if (
+    !pngSig.every(
+      (n, i) => bytes[i] === n
+    ) ||
+
+    String.fromCharCode(
+      ...bytes.slice(12, 16)
+    ) !== "IHDR"
+  ) {
+    return jsonReply(
+      {
+        error: "圖片必須為 PNG 格式。"
+      },
+      400
+    );
+  }
+
+  const view = new DataView(
+    bytes.buffer,
+    bytes.byteOffset,
+    bytes.byteLength
+  );
+
+  const width =
+    view.getUint32(16);
+
+  const height =
+    view.getUint32(20);
+
+  if (
+    width < 800 ||
+    width > 2500 ||
+    height < 250 ||
+    height > 1686 ||
+    width / height < 1.45
+  ) {
+    return jsonReply(
+      {
+        error: "圖片尺寸不符合規格。"
+      },
+      400
+    );
+  }
+
+  const spec = {
+    size: {
+      width,
+      height
+    },
+
+    selected: true,
+
+    name: "TutorFlow 查看選單",
+
+    chatBarText: "查看選單",
+
+    areas: [
+      {
+        bounds: {
+          x: 0,
+          y: 0,
+          width,
+          height
+        },
+
+        action: {
+          type: "postback",
+
+          label: "查看選單",
+
+          data: "menu_open",
+
+          inputOption:
+            "closeRichMenu"
+        }
       }
-    }))
+    ]
   };
-}
 
-const textMessage = (text, base) => ({
-  type: "text",
-  text,
-  quickReply: quickReply(base)
-});
+  let id = null;
+  let installed = false;
 
-const flexMessage = (altText, contents, base) => ({
-  type: "flex",
-  altText,
-  contents,
-  quickReply: quickReply(base)
-});
+  try {
+    const token =
+      env.LINE_CHANNEL_ACCESS_TOKEN;
 
-// =====================================
-// 淺色品牌標頭
-// =====================================
+    await lineAdminFetch(
+      "/v2/bot/richmenu/validate",
 
-function lightHeader(name, title, subtitle, base) {
-  return b([
-    r([
-      b([
-        icon(base, name, "35px")
-      ], {
-        backgroundColor: C.mint,
-        cornerRadius: "12px",
-        paddingAll: "9px",
-        flex: 0
-      }),
+      token,
 
-      b([
-        t("NAMI TUTOR", {
-          size: "xxs",
-          color: C.muted
-        }),
+      {
+        method: "POST",
 
-        t(title, {
-          size: "xl",
-          weight: "bold",
-          color: C.deep
-        }),
+        headers: {
+          "Content-Type":
+            "application/json"
+        },
 
-        t(subtitle, {
-          size: "xs",
-          color: C.muted
-        })
-      ], {
-        flex: 1,
-        spacing: "xs",
-        margin: "md"
-      })
-    ], {
-      spacing: "sm"
-    })
-  ], {
-    backgroundColor: C.cream,
-    paddingAll: "20px"
-  });
-}
+        body: JSON.stringify(spec)
+      }
+    );
 
-// =====================================
-// 歡迎訊息
-// =====================================
+    const created =
+      await lineAdminFetch(
+        "/v2/bot/richmenu",
 
-function welcome(base) {
-  return textMessage(
-    "您好！歡迎。我是睿庭。\n\n" +
-    "請使用下方選單查看教學經驗、" +
-    "課程費用、預約時段及上課須知。" +
-    "或者您可以直接傳訊息，我將盡速回覆。",
-    base
-  );
-}
+        token,
 
-// =====================================
-// 教師介紹
-// =====================================
-
-function introCard(base) {
-  return {
-    type: "bubble",
-    size: "mega",
-
-    header: lightHeader(
-      "teacher",
-      "關於老師",
-      "國小全科｜國中數學・自然",
-      base
-    ),
-
-    body: b([
-      sep("none"),
-
-      t("授課方式", {
-        size: "xs",
-        weight: "bold",
-        color: C.deep
-      }),
-
-      t("到府或線上一對一教學"),
-
-      t("授課時間", {
-        size: "xs",
-        weight: "bold",
-        color: C.deep,
-        margin: "lg"
-      }),
-
-      t("星期一、三、四、六晚上"),
-
-      t("授課地區", {
-        size: "xs",
-        weight: "bold",
-        color: C.deep,
-        margin: "lg"
-      }),
-
-      t("到府以天母地區為佳"),
-
-      sep("lg"),
-
-      t("我的教學方式", {
-        weight: "bold",
-        color: C.deep,
-        margin: "lg"
-      }),
-
-      t("觀念理解、題意拆解、個別化練習"),
-
-      t(
-        "依學生程度調整節奏，" +
-        "陪伴學生練習思考與獨立解題。",
         {
-          color: C.muted,
-          margin: "md"
+          method: "POST",
+
+          headers: {
+            "Content-Type":
+              "application/json"
+          },
+
+          body: JSON.stringify(spec)
         }
-      )
-    ], {
-      paddingAll: "20px",
-      spacing: "md",
-      backgroundColor: C.white
-    })
-  };
-}
+      );
 
-// =====================================
-// 教學成果
-// =====================================
+    id = created.richMenuId;
 
-function progress(subject, from, to, gain) {
-  return b([
-    t(subject, {
-      size: "xs",
-      color: C.muted
-    }),
-
-    r([
-      t(from, {
-        size: "lg",
-        color: "#A0AAA6",
-        weight: "bold",
-        flex: 0
-      }),
-
-      t("→", {
-        size: "sm",
-        color: C.green,
-        flex: 0,
-        margin: "md"
-      }),
-
-      t(to + " 分", {
-        size: "xxl",
-        weight: "bold",
-        color: C.green,
-        flex: 1,
-        margin: "md"
-      }),
-
-      t("+" + gain + " 分", {
-        size: "xs",
-        color: C.green,
-        weight: "bold",
-        flex: 0
-      })
-    ], {
-      margin: "md",
-      spacing: "xs"
-    })
-  ], {
-    spacing: "xs"
-  });
-}
-
-function resultsCard(base) {
-  return {
-    type: "bubble",
-    size: "mega",
-
-    header: lightHeader(
-      "teacher",
-      "教學成果",
-      "用實際進步，看見學習的改變",
-      base
-    ),
-
-    body: b([
-      sep("none"),
-
-      progress("國中數學", "20", "70", 50),
-
-      sep("lg"),
-
-      progress("國中自然", "50", "94", 44),
-
-      sep("lg"),
-
-      b([
-        t("其他教學成果", {
-          weight: "bold",
-          color: C.deep
-        }),
-
-        t("國小數學｜不及格進步至 80 分", {
-          margin: "md"
-        }),
-
-        t("國小全科｜班級排名前 6", {
-          margin: "sm"
-        }),
-
-        t("另有國中數學 90 分的教學案例", {
-          size: "xs",
-          color: C.muted,
-          margin: "sm"
-        })
-      ], {
-        backgroundColor: C.mint,
-        cornerRadius: "12px",
-        paddingAll: "15px",
-        margin: "lg"
-      })
-    ], {
-      paddingAll: "20px",
-      spacing: "lg",
-      backgroundColor: C.white
-    })
-  };
-}
-
-function experienceMessage(base) {
-  return flexMessage(
-    "教學經驗與成果",
-    {
-      type: "carousel",
-      contents: [
-        introCard(base),
-        resultsCard(base)
-      ]
-    },
-    base
-  );
-}
-
-// =====================================
-// 課程費用
-// =====================================
-
-function rateRow(label, amount, featured) {
-  return r([
-    t(label, {
-      color: featured ? C.green : C.muted,
-      weight: featured ? "bold" : "regular",
-      flex: 1
-    }),
-
-    t(dollars(amount) + " /hr", {
-      size: "lg",
-      color: featured ? C.green : C.dark,
-      weight: "bold",
-      align: "end",
-      flex: 1
-    })
-  ], {
-    spacing: "md"
-  });
-}
-
-function priceSection(name, regular, monthly, base) {
-  const total = monthly * 8;
-  const original = regular * 8;
-
-  const iconName =
-    name === "到府教學" ? "home" : "laptop";
-
-  return b([
-    r([
-      b([
-        icon(base, iconName, "30px")
-      ], {
-        backgroundColor: C.mint,
-        cornerRadius: "10px",
-        paddingAll: "8px",
-        flex: 0
-      }),
-
-      t(name, {
-        size: "md",
-        color: C.deep,
-        weight: "bold",
-        flex: 1,
-        margin: "md"
-      })
-    ]),
-
-    rateRow("單堂計費", regular, false),
-
-    rateRow("月收優惠", monthly, true),
-
-    b([
-      t("每堂 2 小時 × 每月 4 堂", {
-        size: "xs",
-        color: C.muted
-      }),
-
-      r([
-        t("單堂合計 " + dollars(original), {
-          size: "xs",
-          color: C.muted,
-          flex: 1
-        }),
-
-        t("省 " + dollars(original - total), {
-          size: "xs",
-          color: C.green,
-          weight: "bold",
-          align: "end",
-          flex: 0
-        })
-      ], {
-        margin: "md"
-      }),
-
-      sep("md"),
-
-      t("月收總額", {
-        size: "xs",
-        weight: "bold",
-        color: C.green,
-        margin: "md"
-      }),
-
-      t(dollars(total), {
-        size: "xxl",
-        weight: "bold",
-        color: C.green,
-        margin: "xs"
-      })
-    ], {
-      backgroundColor: C.mint,
-      cornerRadius: "12px",
-      paddingAll: "15px",
-      spacing: "sm",
-      margin: "md"
-    })
-  ], {
-    spacing: "lg"
-  });
-}
-
-function priceCard(data, base) {
-  return {
-    type: "bubble",
-    size: "mega",
-
-    header: lightHeader(
-      "price",
-      data.title + "家教課程",
-      data.subtitle + "｜一對一教學",
-      base
-    ),
-
-    body: b([
-      sep("none"),
-
-      priceSection(
-        "到府教學",
-        data.onsite[0],
-        data.onsite[1],
-        base
-      ),
-
-      sep("xl"),
-
-      priceSection(
-        "線上教學",
-        data.online[0],
-        data.online[1],
-        base
-      ),
-
-      t(
-        "以上依每堂 2 小時、每月 4 堂試算；" +
-        "實際依授課時數及方案計算。",
-        {
-          size: "xs",
-          color: C.muted,
-          align: "center",
-          margin: "xl"
-        }
-      )
-    ], {
-      paddingAll: "19px",
-      spacing: "xl",
-      backgroundColor: C.white
-    })
-  };
-}
-
-function priceMessage(base) {
-  return flexMessage(
-    "國中與國小家教課程費用",
-    {
-      type: "carousel",
-      contents: [
-        priceCard(PRICES.junior, base),
-        priceCard(PRICES.elementary, base)
-      ]
-    },
-    base
-  );
-}
-
-// =====================================
-// 上課須知
-// =====================================
-
-function rule(number, title, desc) {
-  return r([
-    b([
-      t(number, {
-        weight: "bold",
-        color: C.green,
-        align: "center"
-      })
-    ], {
-      backgroundColor: C.mint,
-      cornerRadius: "8px",
-      paddingAll: "9px",
-      flex: 0
-    }),
-
-    b([
-      t(title, {
-        weight: "bold",
-        color: C.deep
-      }),
-
-      t(desc, {
-        margin: "sm"
-      })
-    ], {
-      flex: 1,
-      margin: "md",
-      spacing: "xs"
-    })
-  ], {
-    alignItems: "flex-start"
-  });
-}
-
-function policyMessage(base) {
-  return flexMessage(
-    "家教上課須知",
-    {
-      type: "bubble",
-      size: "mega",
-
-      header: lightHeader(
-        "policy",
-        "上課須知",
-        "請假・補課・課程安排",
-        base
-      ),
-
-      body: b([
-        sep("none"),
-
-        rule(
-          "01",
-          "提前請假",
-          "最晚請於上課前一日透過 LINE 通知。" +
-          "可補課或直接取消，皆不收取取消費用。"
-        ),
-
-        sep("lg"),
-
-        rule(
-          "02",
-          "當日臨時請假",
-          "原則上不接受當日臨時請假；" +
-          "學生生病或不可抗力狀況除外，" +
-          "可協調補課。"
-        ),
-
-        sep("lg"),
-
-        rule(
-          "03",
-          "補課與取消",
-          "補課時間由雙方協調。" +
-          "月收方案當日若非因生病而直接取消，" +
-          "該堂照常計費；單堂制另依事先約定。"
-        ),
-
-        sep("lg"),
-
-        rule(
-          "04",
-          "遲到與老師請假",
-          "學生遲到仍依原定時間下課。" +
-          "老師請假會協調補課；" +
-          "無法補課則退還或折抵該堂費用。"
-        ),
-
-        sep("lg"),
-
-        t("請假或調課請直接傳訊息與老師聯繫。", {
-          size: "xs",
-          color: C.muted,
-          margin: "lg"
-        })
-      ], {
-        paddingAll: "19px",
-        spacing: "lg",
-        backgroundColor: C.white
-      })
-    },
-    base
-  );
-}
-
-// =====================================
-// 台灣時間
-// =====================================
-
-function taipeiNow() {
-  const parts = new Intl.DateTimeFormat(
-    "en-US",
-    {
-      timeZone: "Asia/Taipei",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23"
+    if (
+      !id ||
+      !/^richmenu-[A-Za-z0-9]+$/.test(id)
+    ) {
+      throw new Error(
+        "無效的 Rich Menu ID"
+      );
     }
-  ).formatToParts(new Date());
 
-  const get = key =>
-    parts.find(p => p.type === key)?.value;
+    await lineAdminFetch(
+      "/v2/bot/richmenu/" +
+      id +
+      "/content",
 
+      token,
+
+      {
+        method: "POST",
+
+        headers: {
+          "Content-Type": "image/png"
+        },
+
+        body: bytes
+      },
+
+      true
+    );
+
+    await lineAdminFetch(
+      "/v2/bot/user/all/richmenu/" + id,
+
+      token,
+
+      {
+        method: "POST"
+      }
+    );
+
+    installed = true;
+
+    return jsonReply({
+      ok: true,
+      richMenuId: id
+    });
+
+  } catch (error) {
+    console.error(
+      "Rich Menu install failed:",
+      error?.message
+    );
+
+    if (id && !installed) {
+      try {
+        await lineAdminFetch(
+          "/v2/bot/richmenu/" + id,
+
+          env.LINE_CHANNEL_ACCESS_TOKEN,
+
+          {
+            method: "DELETE"
+          }
+        );
+      } catch {
+        console.error(
+          "Rich Menu cleanup failed"
+        );
+      }
+    }
+
+    return jsonReply(
+      {
+        error:
+          "圖文選單設定失敗。"
+      },
+      502
+    );
+  }
+}
+
+// ========================================
+// 老師月結管理
+// ========================================
+
+async function handleMonthlyAdmin(request, env, pathname) {
+  const isStudentList = pathname === "/admin/monthly-students";
+  if (request.method !== (isStudentList ? "GET" : "POST")) {
+    return jsonReply({error: "不支援這個請求方式。"}, 405);
+  }
+  const monthlyKey = env.MONTHLY_ADMIN_KEY;
+  if (typeof monthlyKey !== "string" || monthlyKey.length < 32 || monthlyKey.length > 512 ||
+      monthlyKey === env.RICHMENU_ADMIN_KEY) {
+    return jsonReply({error: "請在 Worker 設定獨立的 MONTHLY_ADMIN_KEY，長度至少 32 字元。"}, 503);
+  }
+  const authorization = request.headers.get("Authorization") || "";
+  if (!authorization.startsWith("Bearer ") || !await verifyAdmin(request, monthlyKey)) {
+    return jsonReply({error: "月結管理密鑰不正確。"}, 403);
+  }
+  const origin = request.headers.get("Origin");
+  if (origin && origin !== new URL(request.url).origin) {
+    return jsonReply({error: "請從老師月結管理頁操作。"}, 403);
+  }
+
+  let selection;
+  if (!isStudentList) {
+    selection = await request.json().catch(() => null);
+    if (typeof selection?.studentId !== "string" || !/^[\w.-]{1,160}$/.test(selection.studentId) ||
+        typeof selection?.month !== "string" || !/^\d{4}-(0[1-9]|1[0-2])$/.test(selection.month)) {
+      return jsonReply({error: "請選擇有效的學生與月份。"}, 400);
+    }
+  }
+
+  try {
+    const uid = teacherUid(env);
+    const accessToken = await firebaseAccessToken(env);
+    if (isStudentList) {
+      return jsonReply({students: await listMonthlyStudents(env, uid, accessToken)});
+    }
+    const {revision, workspace} = await loadTutorFlowWorkspace({
+      accessToken, teacherUid: uid, projectId: env.FIREBASE_PROJECT_ID || PROJECT_ID,
+      databaseId: env.FIRESTORE_DATABASE_ID || "(default)"
+    });
+    return jsonReply({revision, ...tutorFlowStudentMonth(workspace, selection.studentId, selection.month)});
+  } catch (error) {
+    if (error.code === "workspace-not-found" || error.code === "student-not-found") {
+      return jsonReply({error: error.message}, 404);
+    }
+    if (error.code === "workspace-conflict") {
+      return jsonReply({error: error.message}, 409);
+    }
+    console.error("Monthly preview read failed", {code: error.code || "backend-error", message: error.message});
+    return jsonReply({error: "目前無法讀取月結資料。請檢查 Firestore 讀取權限或稍後再試。"}, 502);
+  }
+}
+
+async function listMonthlyStudents(env, uid, accessToken) {
+  const result = await fetch(firestoreBase(env) + "/teachers/" + encodeURIComponent(uid) + ":runQuery", {
+    method: "POST",
+    headers: {Authorization: "Bearer " + accessToken, "Content-Type": "application/json"},
+    body: JSON.stringify({
+      structuredQuery: {
+        from: [{collectionId: "studentBindingIndex"}],
+        select: {fields: [{fieldPath: "name"}]},
+        where: {fieldFilter: {field: {fieldPath: "active"}, op: "EQUAL", value: {booleanValue: true}}}
+      }
+    }),
+    cache: "no-store",
+    redirect: "error",
+    signal: AbortSignal.timeout(10000)
+  });
+  if (!result.ok) throw new Error("Firestore student list failed: " + result.status);
+  const rows = await result.json();
+  if (!Array.isArray(rows)) throw new Error("Invalid Firestore student list");
+  const students = [];
+  for (const row of rows) {
+    const document = row.document;
+    const name = document?.fields?.name?.stringValue;
+    const id = document?.name?.split("/").at(-1);
+    if (id && typeof name === "string") students.push({id, name});
+  }
+  return students.sort((a, b) => a.name.localeCompare(b.name, "zh-Hant") || a.id.localeCompare(b.id));
+}
+
+function monthlyAdminPage() {
+  const nonce = crypto.randomUUID();
+  const html = `<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>TutorFlow 月結管理</title>
+<style nonce="${nonce}">
+:root{font-family:system-ui,-apple-system,"Noto Sans TC",sans-serif;color:#273b45;background:#f7f5ee;color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0}
+main{width:min(100% - 32px,840px);margin:40px auto}
+h1,h2{color:#155542;margin:0}
+h1{font-size:clamp(1.6rem,5vw,2.2rem)}
+h2{font-size:1.1rem}
+.card{background:#fffcf8;border:1px solid #e1e8de;border-radius:20px;padding:clamp(16px,4vw,30px);margin-top:20px}
+.controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr));gap:14px;align-items:end}
+label{display:block;font-weight:650;margin:0 0 7px}
+input,select,button{font:inherit;min-height:44px;width:100%;border-radius:10px}
+input,select{padding:8px 12px;border:1px solid #bdccbf;background:#fff;color:#273b45}
+button{border:0;background:#176b53;color:white;font-weight:700;padding:8px 14px;cursor:pointer}
+button:disabled{opacity:.48;cursor:default}
+:focus-visible{outline:3px solid #64856d;outline-offset:2px}
+.status{font-size:.9rem;line-height:1.55;min-height:1.5em;margin:14px 0 0;color:#4a6554}
+.status[data-error]{color:#943923}
+dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(125px,1fr));gap:9px;margin:15px 0}
+dl div{background:#eaf4ed;border-radius:12px;padding:10px 12px}
+dt{font-size:.85rem}dd{margin:4px 0 0;font-weight:700}
+ol{list-style:none;margin:0;padding:0}
+li{display:grid;grid-template-columns:1fr auto;gap:4px 12px;padding:12px 0;border-top:1px solid #e5ece7}
+li strong,li small{display:block;line-height:1.6}
+li small{color:#556662}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<main>
+  <h1>TutorFlow 月結管理</h1>
+  <section class="card" aria-label="選擇月結資料">
+    <form id="unlock" class="controls" autocomplete="off">
+      <div><label for="key">月結管理密鑰</label><input id="key" type="password" required maxlength="512" autocomplete="off"></div>
+      <button id="load" type="submit">載入學生</button>
+    </form>
+    <form id="filters" class="controls" hidden>
+      <div><label for="student">學生</label><select id="student" required></select></div>
+      <div><label for="month">月份</label><input id="month" type="month" required placeholder="YYYY-MM"></div>
+      <button id="preview" type="submit">查看月結預覽</button>
+    </form>
+    <p id="status" class="status" role="status"></p>
+  </section>
+  <section id="result" class="card" aria-labelledby="summary" hidden>
+    <h2 id="summary"></h2>
+    <dl id="totals"></dl>
+    <ol id="rows"></ol>
+  </section>
+</main>
+<script nonce="${nonce}">
+const byId = id => document.getElementById(id);
+const key = byId("key");
+const student = byId("student");
+const month = byId("month");
+const filters = byId("filters");
+const result = byId("result");
+const preview = byId("preview");
+const formatter = new Intl.NumberFormat("zh-TW", {style:"currency", currency:"TWD", maximumFractionDigits:0});
+const hours = new Intl.NumberFormat("zh-TW", {maximumFractionDigits:2});
+const today = new Intl.DateTimeFormat("en", {timeZone:"Asia/Taipei", year:"numeric", month:"2-digit"}).formatToParts();
+month.value = today.find(part => part.type === "year").value + "-" + today.find(part => part.type === "month").value;
+let generation = 0;
+
+function status(message, error = false) {
+  const node = byId("status");
+  node.textContent = message;
+  node.toggleAttribute("data-error", error);
+}
+
+function clearPreview() {
+  result.hidden = true;
+  byId("summary").textContent = "";
+  byId("totals").replaceChildren();
+  byId("rows").replaceChildren();
+}
+
+async function requestMonthly(path, selection) {
+  const headers = {Authorization:"Bearer " + key.value};
+  if (selection) headers["Content-Type"] = "application/json";
+  const response = await fetch(path, {
+    method:selection ? "POST" : "GET", headers,
+    body:selection ? JSON.stringify(selection) : undefined, cache:"no-store"
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error || "目前無法取得資料。");
+  return body;
+}
+
+key.addEventListener("input", () => {
+  generation++;
+  filters.hidden = true;
+  student.replaceChildren();
+  clearPreview();
+  status("");
+});
+
+byId("unlock").addEventListener("submit", async event => {
+  event.preventDefault();
+  const requestGeneration = ++generation;
+  byId("load").disabled = true;
+  filters.hidden = true;
+  clearPreview();
+  status("正在載入學生…");
+  try {
+    const {students} = await requestMonthly("/admin/monthly-students");
+    if (requestGeneration !== generation) return;
+    const counts = new Map();
+    for (const item of students) counts.set(item.name, (counts.get(item.name) || 0) + 1);
+    student.replaceChildren(new Option("選擇學生", ""), ...students.map(item =>
+      new Option(counts.get(item.name) > 1 ? item.name + " · " + item.id : item.name, item.id)));
+    filters.hidden = students.length === 0;
+    status(students.length ? "" : "目前沒有學生索引。請先在 TutorFlow 同步學生索引。");
+  } catch (error) {
+    if (requestGeneration === generation) status(error.message, true);
+  } finally {
+    byId("load").disabled = false;
+  }
+});
+
+filters.addEventListener("change", () => {
+  generation++;
+  clearPreview();
+  status("");
+});
+
+filters.addEventListener("submit", async event => {
+  event.preventDefault();
+  const requestGeneration = ++generation;
+  clearPreview();
+  preview.disabled = true;
+  status("正在讀取月結資料…");
+  try {
+    const data = await requestMonthly("/admin/monthly-preview", {studentId:student.value, month:month.value});
+    if (requestGeneration !== generation) return;
+    const totals = data.totals;
+    const headings = [
+      ["應收", formatter.format(totals.due)], ["已收", formatter.format(totals.paid)],
+      ["待收", formatter.format(totals.unpaid)], ["預約試算", formatter.format(totals.scheduledEstimate)],
+      ["已完成時數", hours.format(totals.completedHours) + " 小時"],
+      ["預約時數", hours.format(totals.scheduledHours) + " 小時"]
+    ];
+    byId("summary").textContent = data.studentName + " · " + data.month;
+    for (const [label, value] of headings) {
+      const box = document.createElement("div");
+      const term = document.createElement("dt");
+      const amount = document.createElement("dd");
+      term.textContent = label;
+      amount.textContent = value;
+      box.append(term, amount);
+      byId("totals").append(box);
+    }
+    for (const row of data.rows) {
+      const item = document.createElement("li");
+      const details = document.createElement("div");
+      const time = document.createElement("strong");
+      const state = document.createElement("small");
+      const money = document.createElement("strong");
+      time.textContent = row.date + " · " + row.start + "–" + row.end;
+      const scheduled = row.status === "scheduled";
+      state.textContent = hours.format(row.hours) + " 小時 · " + (scheduled ? "預約中" : row.paid ? "已收款" : "未收款");
+      money.textContent = (scheduled ? "試算 " : "") + formatter.format(scheduled ? row.estimate : row.amountDue);
+      details.append(time, state);
+      item.append(details, money);
+      byId("rows").append(item);
+    }
+    result.hidden = false;
+    status(data.rows.length ? "" : "這個月份沒有可列出的課程。");
+  } catch (error) {
+    if (requestGeneration === generation) status(error.message, true);
+  } finally {
+    preview.disabled = false;
+  }
+});
+</script>
+</body>
+</html>`;
+  return new Response(html, {
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY",
+      "Referrer-Policy": "no-referrer",
+      "Content-Security-Policy": "default-src 'none'; script-src 'nonce-" + nonce +
+        "'; style-src 'nonce-" + nonce + "'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+    }
+  });
+}
+
+// Imports are not required. Pass the OAuth access token from your existing Worker.
+const TUTORFLOW_MAX_CHUNKS = 32;
+
+function tutorFlowError(code, message) {
+  return Object.assign(new Error(message), {code});
+}
+
+function parseTutorFlowHead(row, name) {
+  if (row?.missing === name) {
+    throw tutorFlowError('workspace-not-found', '找不到老師的工作區。');
+  }
+  const document = row?.found;
+  const fields = document?.fields;
+  const revision = Number(fields?.revision?.integerValue);
+  const chunkCount = Number(fields?.chunkCount?.integerValue);
+  if (document?.name !== name || !document.updateTime ||
+      Number(fields?.version?.integerValue) !== 1 ||
+      !Number.isSafeInteger(revision) || revision < 1 ||
+      !Number.isInteger(chunkCount) || chunkCount < 1 || chunkCount > TUTORFLOW_MAX_CHUNKS) {
+    throw tutorFlowError('invalid-workspace', '工作區 head 的格式或分塊數有誤。');
+  }
   return {
-    date: `${get("year")}-${get("month")}-${get("day")}`,
-    time: `${get("hour")}:${get("minute")}`
+    revision, chunkCount, updateTime: document.updateTime,
+    mutationId: fields.mutationId?.stringValue ?? ''
   };
 }
 
-// =====================================
-// Firestore 公開空堂讀取
-// =====================================
+function decodeTutorFlowChunks(rows, names) {
+  const payloadByName = new Map(rows.filter(row => row.found).map(row => [
+    row.found.name, row.found.fields?.payload?.stringValue
+  ]));
+  const decoder = new TextDecoder('utf-8', {fatal: true});
+  let json = '';
+  for (const [index, name] of names.entries()) {
+    const payload = payloadByName.get(name);
+    if (typeof payload !== 'string' || !payload) {
+      throw tutorFlowError('missing-chunk', '工作區缺少分塊 ' + index + ' 的 payload。');
+    }
+    try {
+      // Each payload has its own Base64 encoding and padding. Decode bytes first.
+      const bytes = Uint8Array.from(atob(payload), char => char.charCodeAt(0));
+      json += decoder.decode(bytes, {stream: true});
+    } catch {
+      throw tutorFlowError('invalid-chunk', '工作區分塊 ' + index + ' 無法解碼。');
+    }
+  }
+  let workspace;
+  try {
+    json += decoder.decode();
+    workspace = JSON.parse(json);
+  } catch {
+    throw tutorFlowError('invalid-workspace', '分塊合併後的工作區無法解析。');
+  }
+  if (!Array.isArray(workspace?.students) || !Array.isArray(workspace?.courses)) {
+    throw tutorFlowError('invalid-workspace', '工作區缺少 students 或 courses 陣列。');
+  }
+  return workspace;
+}
+
+// Server-side only. Resolve teacherUid from your authorized teacher session.
+async function loadTutorFlowWorkspace({
+  accessToken, teacherUid, projectId = 'turtorflow', databaseId = '(default)', fetcher = fetch
+}) {
+  if (typeof teacherUid !== 'string' || !/^[^/\s]{1,128}$/.test(teacherUid) ||
+      /^(__.*__|\.{1,2})$/.test(teacherUid) || !accessToken) {
+    throw tutorFlowError('invalid-argument', '缺少受授權的老師 UID 或 OAuth access token。');
+  }
+  const resource = 'projects/' + projectId + '/databases/' + databaseId;
+  const headName = resource + '/documents/teachers/' + teacherUid + '/workspace/head';
+  const endpoint = 'https://firestore.googleapis.com/v1/projects/' + encodeURIComponent(projectId) +
+    '/databases/' + encodeURIComponent(databaseId) + '/documents:batchGet';
+
+  async function batchGet(documents) {
+    const response = await fetcher(endpoint, {
+      method: 'POST',
+      headers: {Authorization: 'Bearer ' + accessToken, 'Content-Type': 'application/json'},
+      body: JSON.stringify({documents}),
+      cache: 'no-store',
+      redirect: 'error',
+      signal: AbortSignal.timeout(10000)
+    });
+    if (!response.ok) {
+      throw tutorFlowError('firestore-read-failed', 'Firestore 讀取失敗（HTTP ' + response.status + '）。');
+    }
+    const rows = await response.json();
+    if (!Array.isArray(rows)) {
+      throw tutorFlowError('invalid-response', 'Firestore 回傳的文件格式不正確。');
+    }
+    return rows;
+  }
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const [firstRow] = await batchGet([headName]);
+    const first = parseTutorFlowHead(firstRow, headName);
+    const names = Array.from({length: first.chunkCount}, (_, index) => headName + '/chunks/' + index);
+    const rows = await batchGet(names);
+    const [latestRow] = await batchGet([headName]);
+    const latest = parseTutorFlowHead(latestRow, headName);
+    if (first.revision !== latest.revision || first.chunkCount !== latest.chunkCount ||
+        first.mutationId !== latest.mutationId || first.updateTime !== latest.updateTime) {
+      continue;
+    }
+    return {
+      revision: first.revision,
+      chunkCount: first.chunkCount,
+      workspace: decodeTutorFlowChunks(rows, names)
+    };
+  }
+  throw tutorFlowError('workspace-conflict', '工作區正在更新，請重新載入月結預覽。');
+}
+
+function tutorFlowCourseHours(course) {
+  // Both ends are on the same local teaching date in Taiwan.
+  const start = Date.parse(course.date + 'T' + course.start + ':00+08:00');
+  const end = Date.parse(course.date + 'T' + course.end + ':00+08:00');
+  return Math.max(0, (end - start) / 3600000);
+}
+
+function tutorFlowCourseAmount(course) {
+  return tutorFlowCourseHours(course) * (Number(course.rateSnapshot) || 0);
+}
+
+function tutorFlowStudentMonth(workspace, studentId, month) {
+  if (typeof studentId !== 'string' || !/^[\w.-]{1,160}$/.test(studentId) ||
+      typeof month !== 'string' || !/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
+    throw tutorFlowError('invalid-argument', '請使用有效的 studentId 和 YYYY-MM。');
+  }
+  const student = workspace.students.find(item => item.id === studentId);
+  const studentCourses = workspace.courses.filter(course => course.studentId === studentId);
+  if (!student && !studentCourses.length) {
+    throw tutorFlowError('student-not-found', '工作區沒有此學生或其歷史課程。');
+  }
+  const historicalName = studentCourses.find(course => course.studentNameSnapshot)?.studentNameSnapshot;
+  const rows = [];
+  const seen = new Set();
+  const totals = {completedHours: 0, due: 0, paid: 0, unpaid: 0, scheduledHours: 0, scheduledEstimate: 0};
+  for (const course of studentCourses) {
+    if (!course.date.startsWith(month + '-') || !['scheduled', 'completed'].includes(course.status) ||
+        seen.has(course.id)) continue;
+    seen.add(course.id);
+    const hours = tutorFlowCourseHours(course);
+    const amount = tutorFlowCourseAmount(course);
+    if (!Number.isFinite(hours) || !Number.isFinite(amount)) {
+      throw tutorFlowError('invalid-course', '指定學生與月份有無法計算的課程資料。');
+    }
+    const completed = course.status === 'completed';
+    const paid = completed && Boolean(course.paid);
+    rows.push({
+      id: course.id, date: course.date, start: course.start, end: course.end,
+      status: course.status, hours, rateSnapshot: Number(course.rateSnapshot) || 0,
+      amountDue: completed ? amount : 0, paid, estimate: completed ? 0 : amount
+    });
+    if (completed) {
+      totals.completedHours += hours;
+      totals.due += amount;
+      if (paid) totals.paid += amount;
+    } else {
+      totals.scheduledHours += hours;
+      totals.scheduledEstimate += amount;
+    }
+  }
+  totals.unpaid = totals.due - totals.paid;
+  rows.sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start) || a.id.localeCompare(b.id));
+  return {studentId, studentName: student?.name ?? historicalName ?? '未指定學生', month, rows, totals};
+}
 
 const defaultProject = PROJECT_ID;
 
@@ -1152,7 +3523,7 @@ export async function handleStudentLookup(request, env, fetcher = fetch) {
   if (request.method !== "POST") return reply({code: "method-not-allowed"}, 405);
   const idToken = request.headers.get("Authorization")?.match(/^Bearer ([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/i)?.[1];
   if (!idToken || idToken.length > 8192) return reply({code: "unauthenticated"}, 401);
-  const teacherUid = env.TEACHER_UID;
+  const teacherUid = env.TUTORFLOW_TEACHER_UID || env.TEACHER_UID;
   const apiKey = env.FIREBASE_WEB_API_KEY;
   if (!apiKey || typeof teacherUid !== "string" || !/^[^/\s]{1,128}$/.test(teacherUid) ||
       /^(__.*__|\.{1,2})$/.test(teacherUid)) return reply({code: "not-configured"}, 503);
@@ -1208,1038 +3579,5 @@ export async function handleStudentLookup(request, env, fetcher = fetch) {
     return reply({status: "matched", student: {id: studentId, name}});
   } catch {
     return reply({code: "lookup-unavailable"}, 503);
-  }
-}
-
-async function readTeacherAvailabilityDocument(env, fetchDocument = fetch) {
-  const teacherUid = env?.TEACHER_UID;
-  if (typeof teacherUid !== 'string' || !/^[^/\s]{1,128}$/.test(teacherUid) || /^(__.*__|\.{1,2})$/.test(teacherUid)) {
-    throw new Error('TEACHER_UID is missing or invalid');
-  }
-  const project = env.FIREBASE_PROJECT_ID || defaultProject;
-  const database = env.FIRESTORE_DATABASE_ID || '(default)';
-  const root = 'https://firestore.googleapis.com/v1/projects/';
-  const url = root + encodeURIComponent(project) + '/databases/' + encodeURIComponent(database) +
-    '/documents/teachers/' + encodeURIComponent(teacherUid) + '/public/publicAvailability';
-  const response = await fetchDocument(url, {cache: 'no-store'});
-  if (!response.ok) throw new Error('Firestore ' + response.status);
-  const document = await response.json();
-  const arrayValue = document.fields?.slots?.arrayValue;
-  if (!arrayValue || !Array.isArray(arrayValue.values ?? [])) {
-    throw new Error('Firestore public availability document is missing its slots array');
-  }
-  return arrayValue.values ?? [];
-}
-
-function selectTeacherAvailability(rows, now) {
-  const slots = [];
-  for (const row of rows) {
-    const f = row.mapValue?.fields || {};
-    const date = f.date?.stringValue;
-    const start = f.start?.stringValue;
-    const end = f.end?.stringValue;
-    const status = f.status?.stringValue;
-    if (status !== 'available' || !/^\d{4}-\d{2}-\d{2}$/.test(date || '') ||
-        !/^\d{2}:\d{2}$/.test(start || '') || !/^\d{2}:\d{2}$/.test(end || '') ||
-        end <= start || date < now.date || (date === now.date && end <= now.time)) continue;
-    slots.push({date, start, end});
-  }
-  return slots.sort((a, b) => a.date.localeCompare(b.date) || a.start.localeCompare(b.start));
-}
-
-async function availability(env) {
-  const now = taipeiNow();
-  const rows = await readTeacherAvailabilityDocument(env);
-  return selectTeacherAvailability(rows, now);
-}
-
-// =====================================
-// 預約訊息連結
-// =====================================
-
-function bookingUrl(oaId, slot) {
-  const message = [
-    "您好，我想詢問家教預約。",
-    "",
-    `日期：${slot.date}`,
-    `時間：${slot.start}–${slot.end}`,
-    "",
-    "學生年級：",
-    "科目：",
-    "上課地點：",
-    "",
-    "請問這個時段還可以預約嗎？謝謝！"
-  ].join("\n");
-
-  return (
-    "https://line.me/R/oaMessage/" +
-    `${encodeURIComponent(oaId)}/?` +
-    `${encodeURIComponent(message)}`
-  );
-}
-
-// =====================================
-// 空堂卡片
-// =====================================
-
-function calendarCard(date, slots, oaId, base) {
-  const [y, m, d] = date.split("-").map(Number);
-
-  const weekdays = [
-    "日", "一", "二", "三",
-    "四", "五", "六"
-  ];
-
-  const weekday = weekdays[
-    new Date(Date.UTC(y, m - 1, d))
-      .getUTCDay()
-  ];
-
-  const visible = slots.slice(
-    0,
-    MAX_TIMES_PER_DAY
-  );
-
-  const buttons = visible.map(slot => ({
-    type: "button",
-    style: "secondary",
-    height: "sm",
-    color: C.mint,
-    margin: "md",
-
-    action: {
-      type: "uri",
-      label: `${slot.start}–${slot.end}`,
-      uri: bookingUrl(oaId, slot)
-    }
-  }));
-
-  const extra = slots.length - visible.length;
-
-  return {
-    type: "bubble",
-    size: "kilo",
-
-    header: lightHeader(
-      "calendar",
-      `${m}/${d}　星期${weekday}`,
-      "可預約上課時段",
-      base
-    ),
-
-    body: b([
-      t("請選擇適合的時段", {
-        color: C.muted
-      }),
-
-      ...buttons,
-
-      ...(extra > 0
-        ? [
-            t(
-              `另外還有 ${extra} 個時段，歡迎私訊詢問`,
-              {
-                size: "xs",
-                color: C.muted,
-                margin: "md"
-              }
-            )
-          ]
-        : []
-      ),
-
-      sep("lg"),
-
-      t(
-        "點擊時段後，請填寫學生年級、" +
-        "科目、上課地點，再送出訊息。",
-        {
-          size: "xs",
-          color: C.muted,
-          margin: "lg"
-        }
-      )
-    ], {
-      paddingAll: "17px",
-      spacing: "md"
-    })
-  };
-}
-
-function calendarMessage(slots, oaId, base) {
-  const grouped = new Map();
-
-  for (const slot of slots) {
-    if (!grouped.has(slot.date)) {
-      grouped.set(slot.date, []);
-    }
-
-    grouped.get(slot.date).push(slot);
-  }
-
-  return flexMessage(
-    "家教可預約時段",
-    {
-      type: "carousel",
-      contents: [...grouped.keys()]
-        .sort()
-        .slice(0, MAX_DAYS)
-        .map(date =>
-          calendarCard(
-            date,
-            grouped.get(date),
-            oaId,
-            base
-          )
-        )
-    },
-    base
-  );
-}
-
-// =====================================
-// 指令辨識
-// =====================================
-
-function command(event) {
-  if (event.type === "postback") {
-    const commands = {
-      menu_open: "查看選單",
-      menu_experience: "教學經驗",
-      menu_price: "課程費用",
-      menu_availability: "詢問時段",
-      menu_policy: "上課須知"
-    };
-
-    return commands[event.postback?.data] || "";
-  }
-
-  if (
-    event.type === "message" &&
-    event.message?.type === "text"
-  ) {
-    return String(
-      event.message.text || ""
-    ).trim();
-  }
-
-  return "";
-}
-
-// =====================================
-// 純文字備援
-// =====================================
-
-function fallbackPrice() {
-  return (
-    "家教課程費用\n\n" +
-
-    "【國中】\n" +
-    "到府：單堂 $700/hr，月收 $650/hr\n" +
-    "線上：單堂 $600/hr，月收 $500/hr\n" +
-    "月收試算：到府 $5,200，線上 $4,000\n\n" +
-
-    "【國小】\n" +
-    "到府：單堂 $600/hr，月收 $550/hr\n" +
-    "線上：單堂 $500/hr，月收 $400/hr\n" +
-    "月收試算：到府 $4,400，線上 $3,200\n\n" +
-
-    "以每堂 2 小時、每月 4 堂計算。"
-  );
-}
-
-// =====================================
-// LINE Webhook 處理
-// =====================================
-
-async function handleEvent(event, env, base) {
-  if (!event?.replyToken) return;
-
-  let message = null;
-  let fallback = "";
-
-  if (event.type === "follow") {
-    message = welcome(base);
-  }
-
-  else if (
-    event.type === "postback" ||
-    (
-      event.type === "message" &&
-      event.message?.type === "text"
-    )
-  ) {
-    const input = command(event);
-
-    // 單一圖文選單的 Postback
-    if (input === "查看選單") {
-      message = welcome(base);
-    }
-
-    else if (input === "教學經驗") {
-      message = experienceMessage(base);
-
-      fallback =
-        "教學經驗：國小全科、國中數學與自然。" +
-        "國中數學 20→70，國中自然 50→94，" +
-        "國小數學不及格→80，" +
-        "國小全科班排前六。";
-    }
-
-    else if (input === "課程費用") {
-      message = priceMessage(base);
-      fallback = fallbackPrice();
-    }
-
-    else if (
-      [
-        "上課須知",
-        "請假規範",
-        "補課規範"
-      ].includes(input)
-    ) {
-      message = policyMessage(base);
-
-      fallback =
-        "上課須知：最晚前一天請假，" +
-        "可補課或取消；" +
-        "當日非因生病取消，" +
-        "月收方案照常計費；" +
-        "學生遲到不順延。";
-    }
-
-    else if (
-      [
-        "詢問時段",
-        "諮詢時間",
-        "詢問可預約時間",
-        "可預約時間",
-        "查看空堂",
-        "預約時間"
-      ].includes(input)
-    ) {
-      try {
-        const oaId = String(
-          env.LINE_OA_ID || ""
-        ).trim();
-
-        if (!/^@[A-Za-z0-9._-]+$/.test(oaId)) {
-          throw new Error(
-            "LINE_OA_ID incorrect"
-          );
-        }
-
-        const slots = await availability(env);
-
-        message = slots.length
-          ? calendarMessage(slots, oaId, base)
-          : textMessage(
-              "目前沒有開放的預約時段，" +
-              "請直接私訊老師。",
-              base
-            );
-
-        fallback =
-          "目前無法顯示預約卡片，" +
-          "請直接私訊老師詢問空堂。";
-      } catch (err) {
-        console.error("Availability error", err);
-
-        message = textMessage(
-          "目前無法讀取最新空堂，" +
-          "請直接私訊老師。",
-          base
-        );
-      }
-    }
-
-    // 舊版文字指令保留相容
-    else if (
-      [
-        "選單",
-        "menu",
-        "你好",
-        "您好",
-        "嗨",
-        "hi"
-      ].includes(input.toLowerCase())
-    ) {
-      message = welcome(base);
-    }
-
-    // 一般私訊留給真人老師
-    else {
-      return;
-    }
-  }
-
-  else {
-    return;
-  }
-
-  if (!message) return;
-
-  // 驗證 Flex 訊息
-  if (message.type === "flex") {
-    try {
-      const validation = await fetch(
-        "https://api.line.me/v2/bot/message/validate/reply",
-        {
-          method: "POST",
-          headers: {
-            Authorization:
-              `Bearer ${env.LINE_CHANNEL_ACCESS_TOKEN}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            messages: [message]
-          })
-        }
-      );
-
-      if (!validation.ok) {
-        console.error(
-          "Flex validation failed",
-          await validation.text()
-        );
-
-        message = textMessage(
-          fallback ||
-          "卡片暫時無法顯示，請私訊老師。",
-          base
-        );
-      }
-    } catch (err) {
-      console.error("Validation error", err);
-    }
-  }
-
-  // 回覆訊息
-  const response = await fetch(
-    "https://api.line.me/v2/bot/message/reply",
-    {
-      method: "POST",
-      headers: {
-        Authorization:
-          `Bearer ${env.LINE_CHANNEL_ACCESS_TOKEN}`,
-        "Content-Type": "application/json"
-      },
-
-      body: JSON.stringify({
-        replyToken: event.replyToken,
-        messages: [message]
-      })
-    }
-  );
-
-  if (!response.ok) {
-    console.error(
-      "LINE reply failed",
-      response.status,
-      await response.text()
-    );
-  }
-}
-
-// =====================================
-// Rich Menu 管理頁
-// =====================================
-
-function adminPage() {
-  const html = `<!doctype html>
-<html lang="zh-Hant">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="robots" content="noindex,nofollow">
-<title>TutorFlow 圖文選單管理</title>
-<style>
-:root{
-  font-family:system-ui,-apple-system,"Noto Sans TC",sans-serif;
-  color-scheme:light;
-}
-*{box-sizing:border-box}
-body{
-  background:#f5f8f5;
-  margin:0;
-  padding:24px 14px;
-  color:#273b45;
-}
-main{
-  max-width:560px;
-  margin:35px auto;
-  background:white;
-  border:1px solid #e5ece7;
-  border-radius:20px;
-  padding:30px;
-  box-shadow:0 12px 40px #15554210;
-}
-h1{
-  font-size:23px;
-  color:#155542;
-  margin:0 0 10px;
-}
-p{
-  font-size:14px;
-  color:#687889;
-  line-height:1.8;
-}
-label{
-  display:block;
-  font-size:14px;
-  font-weight:600;
-  margin:22px 0 9px;
-}
-input{
-  display:block;
-  width:100%;
-  padding:13px;
-  border:1px solid #c8d7cd;
-  border-radius:10px;
-  font-size:15px;
-}
-button{
-  width:100%;
-  margin-top:25px;
-  padding:15px;
-  border:0;
-  border-radius:10px;
-  background:#176b53;
-  color:white;
-  font-size:15px;
-  font-weight:600;
-  cursor:pointer;
-}
-button:disabled{
-  opacity:.55;
-}
-.hint{
-  font-size:12px;
-}
-pre{
-  white-space:pre-wrap;
-  overflow-wrap:anywhere;
-  padding:15px;
-  background:#eaf4ed;
-  border-radius:10px;
-  font-size:13px;
-  line-height:1.7;
-}
-.error{
-  background:#fff0ee;
-  color:#9c302a;
-}
-</style>
-</head>
-<body>
-<main>
-<h1>圖文選單管理</h1>
-
-<p>
-沿用你原本的「查看選單」圖片。
-家長點擊後由 Worker 回覆四個 Quick Reply，
-不需要傳送「選單」聊天文字。
-</p>
-
-<form id="form">
-
-<label for="secret">管理員密鑰</label>
-<input
-  id="secret"
-  type="password"
-  autocomplete="off"
-  placeholder="RICHMENU_ADMIN_KEY"
-  required
->
-
-<label for="file">圖文選單圖片</label>
-<input
-  id="file"
-  type="file"
-  accept="image/png"
-  required
->
-
-<p class="hint">
-請上傳 PNG 圖片，最大 1 MB。
-寬度 800～2500 px，高度至少 250 px。
-</p>
-
-<button id="submit" type="submit">
-上傳並啟用圖文選單
-</button>
-
-</form>
-
-<p class="hint">
-只有按下上傳並啟用後，才會修改 LINE 的預設圖文選單。
-請勿將管理密鑰分享給其他人。
-</p>
-
-<pre id="result" role="status" hidden></pre>
-
-</main>
-
-<script>
-const form = document.getElementById("form");
-const output = document.getElementById("result");
-const button = document.getElementById("submit");
-
-form.addEventListener("submit", async event => {
-  event.preventDefault();
-
-  const file = document.getElementById("file").files[0];
-  const secret = document.getElementById("secret").value;
-
-  if (!file) return;
-
-  output.hidden = false;
-
-  if (file.size > 1048576) {
-    output.className = "error";
-    output.textContent = "圖片超過 1 MB";
-    return;
-  }
-
-  button.disabled = true;
-  output.className = "";
-  output.textContent = "正在建立並上傳圖文選單...";
-
-  try {
-    const formData = new FormData();
-
-    formData.append(
-      "image",
-      file,
-      file.name
-    );
-
-    const response = await fetch(
-      "/admin/richmenu/install",
-      {
-        method: "POST",
-        headers: {
-          Authorization: "Bearer " + secret
-        },
-        body: formData,
-        cache: "no-store"
-      }
-    );
-
-    const result = await response.json();
-
-    if (!response.ok) {
-      throw new Error(
-        result.error || "上傳失敗"
-      );
-    }
-
-    output.textContent =
-      "圖文選單已成功啟用！\\n" +
-      "Rich Menu ID：" + result.richMenuId +
-      "\\n請重新開啟 LINE 聊天室測試。";
-
-  } catch (err) {
-    output.className = "error";
-    output.textContent =
-      "設定失敗：" + err.message;
-
-  } finally {
-    button.disabled = false;
-  }
-});
-</script>
-</body>
-</html>`;
-
-  return new Response(html, {
-    headers: {
-      "Content-Type": "text/html; charset=utf-8",
-      "Cache-Control": "no-store",
-      "X-Content-Type-Options": "nosniff",
-      "X-Frame-Options": "DENY",
-      "Referrer-Policy": "no-referrer",
-      "Content-Security-Policy":
-        "default-src 'none'; " +
-        "script-src 'unsafe-inline'; " +
-        "style-src 'unsafe-inline'; " +
-        "connect-src 'self'; " +
-        "form-action 'self'; " +
-        "base-uri 'none'"
-    }
-  });
-}
-
-// =====================================
-// 管理密鑰驗證
-// =====================================
-
-async function verifyAdmin(request, expected) {
-  const token = (
-    request.headers.get("authorization") || ""
-  ).replace(/^Bearer\s+/i, "");
-
-  if (!expected || !token || token.length > 512) {
-    return false;
-  }
-
-  const encoder = new TextEncoder();
-
-  const [a, b] = await Promise.all([
-    crypto.subtle.digest(
-      "SHA-256",
-      encoder.encode(token)
-    ),
-    crypto.subtle.digest(
-      "SHA-256",
-      encoder.encode(expected)
-    )
-  ]);
-
-  const x = new Uint8Array(a);
-  const y = new Uint8Array(b);
-
-  let difference = 0;
-
-  for (let i = 0; i < x.length; i++) {
-    difference |= x[i] ^ y[i];
-  }
-
-  return difference === 0;
-}
-
-// =====================================
-// JSON 回覆
-// =====================================
-
-function jsonReply(data, status = 200) {
-  return new Response(
-    JSON.stringify(data),
-    {
-      status,
-      headers: {
-        "Content-Type":
-          "application/json; charset=utf-8",
-        "Cache-Control": "no-store",
-        "X-Content-Type-Options": "nosniff"
-      }
-    }
-  );
-}
-
-// =====================================
-// LINE 管理 API
-// =====================================
-
-async function lineAdminFetch(
-  path,
-  token,
-  options = {},
-  dataDomain = false
-) {
-  const base = dataDomain
-    ? "https://api-data.line.me"
-    : "https://api.line.me";
-
-  const response = await fetch(
-    base + path,
-    {
-      ...options,
-      headers: {
-        Authorization: "Bearer " + token,
-        ...(options.headers || {})
-      }
-    }
-  );
-
-  if (!response.ok) {
-    const error = (
-      await response.text()
-    ).slice(0, 600);
-
-    throw new Error(
-      "LINE API " +
-      response.status +
-      ": " +
-      error
-    );
-  }
-
-  if (response.status === 204) {
-    return {};
-  }
-
-  const text = await response.text();
-
-  try {
-    return text ? JSON.parse(text) : {};
-  } catch {
-    return {};
-  }
-}
-
-// =====================================
-// 安裝單一圖文選單
-// =====================================
-
-async function installRichMenu(request, env) {
-  if (!env.RICHMENU_ADMIN_KEY) {
-    return jsonReply({
-      error:
-        "尚未設定 RICHMENU_ADMIN_KEY Secret"
-    }, 503);
-  }
-
-  const authorized = await verifyAdmin(
-    request,
-    env.RICHMENU_ADMIN_KEY
-  );
-
-  if (!authorized) {
-    return jsonReply({
-      error: "管理密鑰錯誤"
-    }, 401);
-  }
-
-  if (!env.LINE_CHANNEL_ACCESS_TOKEN) {
-    return jsonReply({
-      error: "缺少 LINE_CHANNEL_ACCESS_TOKEN"
-    }, 503);
-  }
-
-  const contentType =
-    request.headers.get("content-type") || "";
-
-  if (!contentType.startsWith("multipart/form-data")) {
-    return jsonReply({
-      error: "請從管理頁上傳 PNG 圖片"
-    }, 415);
-  }
-
-  const contentLength = Number(
-    request.headers.get("content-length") || 0
-  );
-
-  if (contentLength > 1400000) {
-    return jsonReply({
-      error: "上傳內容過大"
-    }, 413);
-  }
-
-  let file;
-
-  try {
-    const form = await request.formData();
-    file = form.get("image");
-  } catch {
-    return jsonReply({
-      error: "圖片上傳格式錯誤"
-    }, 400);
-  }
-
-  if (
-    !file ||
-    typeof file.arrayBuffer !== "function"
-  ) {
-    return jsonReply({
-      error: "請先選擇圖片"
-    }, 400);
-  }
-
-  if (
-    file.size < 24 ||
-    file.size > 1048576
-  ) {
-    return jsonReply({
-      error: "圖片必須小於 1 MB"
-    }, 400);
-  }
-
-  const bytes = new Uint8Array(
-    await file.arrayBuffer()
-  );
-
-  // 驗證 PNG 簽章
-  const pngSignature = [
-    137, 80, 78, 71,
-    13, 10, 26, 10
-  ];
-
-  const validPNG =
-    pngSignature.every(
-      (value, i) => bytes[i] === value
-    ) &&
-    String.fromCharCode(
-      ...bytes.slice(12, 16)
-    ) === "IHDR";
-
-  if (!validPNG) {
-    return jsonReply({
-      error: "圖片必須是 PNG 格式"
-    }, 400);
-  }
-
-  // 讀取 PNG 寬高
-  const view = new DataView(
-    bytes.buffer,
-    bytes.byteOffset,
-    bytes.byteLength
-  );
-
-  const width = view.getUint32(16);
-  const height = view.getUint32(20);
-
-  if (
-    width < 800 ||
-    width > 2500 ||
-    height < 250 ||
-    width / height < 1.45
-  ) {
-    return jsonReply({
-      error:
-        "圖片尺寸不符合 LINE 圖文選單規格。" +
-        "寬度需 800～2500 px，" +
-        "高度至少 250 px，" +
-        "寬高比至少 1.45。"
-    }, 400);
-  }
-
-  // 整張圖片都是單一查看選單按鈕
-  const richMenu = {
-    size: {
-      width,
-      height
-    },
-
-    selected: true,
-
-    name: "TutorFlow 單一查看選單",
-
-    chatBarText: "查看選單",
-
-    areas: [
-      {
-        bounds: {
-          x: 0,
-          y: 0,
-          width,
-          height
-        },
-
-        action: {
-          type: "postback",
-          label: "查看選單",
-          data: "menu_open",
-          inputOption: "closeRichMenu"
-        }
-      }
-    ]
-  };
-
-  const token = env.LINE_CHANNEL_ACCESS_TOKEN;
-
-  let richMenuId = null;
-  let installed = false;
-
-  try {
-    // 1. 驗證 Rich Menu JSON
-    await lineAdminFetch(
-      "/v2/bot/richmenu/validate",
-      token,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(richMenu)
-      }
-    );
-
-    // 2. 建立圖文選單
-    const created = await lineAdminFetch(
-      "/v2/bot/richmenu",
-      token,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(richMenu)
-      }
-    );
-
-    richMenuId = created.richMenuId;
-
-    if (
-      !richMenuId ||
-      !/^richmenu-[A-Za-z0-9]+$/.test(richMenuId)
-    ) {
-      throw new Error(
-        "LINE 沒有回傳有效 richMenuId"
-      );
-    }
-
-    // 3. 上傳 PNG 至 LINE
-    await lineAdminFetch(
-      "/v2/bot/richmenu/" +
-      richMenuId +
-      "/content",
-      token,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "image/png"
-        },
-        body: bytes
-      },
-      true
-    );
-
-    // 4. 設定所有好友的預設選單
-    await lineAdminFetch(
-      "/v2/bot/user/all/richmenu/" +
-      richMenuId,
-      token,
-      {
-        method: "POST"
-      }
-    );
-
-    installed = true;
-
-    return jsonReply({
-      ok: true,
-      richMenuId
-    });
-
-  } catch (error) {
-    console.error(
-      "Rich Menu setup failed",
-      error
-    );
-
-    // 失敗時清除尚未啟用的新選單
-    if (richMenuId && !installed) {
-      try {
-        await lineAdminFetch(
-          "/v2/bot/richmenu/" + richMenuId,
-          token,
-          {
-            method: "DELETE"
-          }
-        );
-      } catch (cleanupError) {
-        console.error(
-          "Cleanup failed",
-          cleanupError
-        );
-      }
-    }
-
-    return jsonReply({
-      error: String(
-        error.message || error
-      )
-    }, 502);
   }
 }
