@@ -158,7 +158,7 @@ function googleApi(project, accessToken, fetcher) {
       throw failure('backend-unavailable', 503);
     },
 
-    async collectionNames(path) {
+    async collectionNames(path, firstPageOnly = false) {
       const prefix = name(path) + '/';
       const names = [];
       let nextPageToken;
@@ -179,7 +179,7 @@ function googleApi(project, accessToken, fetcher) {
         }
         nextPageToken = page.nextPageToken;
         if (path !== 'memberships' && names.length > 400) throw failure('backend-unavailable', 503);
-      } while (nextPageToken);
+      } while (nextPageToken && !firstPageOnly);
       return names;
     },
 
@@ -251,6 +251,11 @@ async function deleteTeacher(api, actorUid, targetUid) {
     }
     const chunks = await api.collectionNames('teachers/' + targetUid + '/workspace/head/chunks');
     await api.deleteAuth(targetUid);
+    const indexPath = 'teachers/' + targetUid + '/studentBindingIndex';
+    for (let entries = await api.collectionNames(indexPath, true); entries.length;
+      entries = await api.collectionNames(indexPath, true)) {
+      await api.commit(entries.map(name => ({delete: name})));
+    }
     await api.commit([
       ...chunks.map(name => ({delete: name})),
       ...[

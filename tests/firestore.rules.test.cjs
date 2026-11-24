@@ -135,6 +135,28 @@ test('old root availability and bridge are inaccessible to app clients', async (
   await assertFails(getDoc(doc(as('admin'), 'legacyLineBridge/config')));
 });
 
+test('student lookup index is owner-only and cannot store extra private fields', async () => {
+  const path = 'teachers/teacher-a/studentBindingIndex';
+  const owner = as('teacher-a');
+  const data = {name: '甲乙', active: true};
+  const ref = doc(owner, path + '/s1');
+  await assertSucceeds(setDoc(ref, data));
+  await assertSucceeds(getDocs(collection(owner, path)));
+  await assertSucceeds(updateDoc(ref, {name: '甲丙', active: false}));
+  await assertFails(updateDoc(ref, {rate: 800}));
+  await assertFails(setDoc(doc(owner, path + '/s2'), {name: '無狀態'}));
+  await assertFails(setDoc(doc(owner, path + '/s2'), {name: '錯誤狀態', active: 'true'}));
+  for (const auth of [as('teacher-b'), as('admin'), as('teacher-a', 'password', false),
+    fixture.unauthenticatedContext().firestore()]) {
+    await assertFails(getDoc(doc(auth, path + '/s1')));
+    await assertFails(getDocs(collection(auth, path)));
+    await assertFails(setDoc(doc(auth, path + '/s2'), data));
+    await assertFails(deleteDoc(doc(auth, path + '/s1')));
+  }
+  await assertFails(setDoc(doc(as('disabled'), 'teachers/disabled/studentBindingIndex/s1'), data));
+  await assertSucceeds(deleteDoc(ref));
+});
+
 test('only admin controls whether new pending memberships can be created', async () => {
   const admin = as('admin'), teacher = as('teacher-a'), applicant = as('fresh-teacher');
   await assertFails(setDoc(doc(teacher, 'systemSettings/main'), {signupOpen: false}));

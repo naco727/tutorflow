@@ -49,6 +49,11 @@ function mountCloudControls() {
       <button type="button" class="btn btn-secondary" id="pendingDraft">匯出待同步草稿</button>
       <button type="button" class="btn btn-secondary" id="legacyBackup" hidden>下載此瀏覽器的舊資料</button>
     </div>`);
+  $('#settings-data .settings-grid').insertAdjacentHTML('beforeend', `
+    <section class="card">
+      <div class="section-head"><div><h2>學生查詢索引</h2><p id="studentIndexStatus" role="status"></p></div></div>
+      <button type="button" class="btn btn-secondary" id="syncStudentIndex">同步學生索引</button>
+    </section>`);
 }
 
 function cloudErrorText(error) {
@@ -143,6 +148,41 @@ function removeDraft(session) {
   try { localStorage.removeItem(session.draftKey); } catch {}
 }
 
+async function syncStudentIndex(session, force = false) {
+  if (session !== cloudSession || session.studentIndexSyncing) return;
+  const base = session.base;
+  const status = $('#studentIndexStatus');
+  const button = $('#syncStudentIndex');
+  try {
+    const students = base.revision ? JSON.parse(base.text).students : [];
+    const entries = TutorFlowStudentIndex.entries(students);
+    const signature = JSON.stringify(entries);
+    if (!force && session.studentIndexSignature === signature) return;
+    session.studentIndexSyncing = true;
+    button.disabled = true;
+    status.textContent = '正在同步已儲存的學生資料…';
+    const count = await TutorFlowStudentIndex.reconcile(session.db, session.user.uid, base.revision, entries);
+    if (session !== cloudSession) return;
+    session.studentIndexSignature = signature;
+    status.textContent = `已同步 ${count} 筆學生索引。`;
+  } catch (error) {
+    if (session !== cloudSession) return;
+    session.studentIndexSignature = null;
+    const reason = error.code === 'permission-denied'
+      ? '請確認已發布學生索引的 Firestore 規則。'
+      : error.code === 'index-revision-changed'
+        ? '工作區有較新的版本。請待資料更新後重試。'
+        : '請稍後重試。';
+    status.textContent = `學生索引同步失敗。工作區儲存可繼續使用。${reason}`;
+  } finally {
+    session.studentIndexSyncing = false;
+    if (session === cloudSession) {
+      button.disabled = false;
+      if (session.base !== base) syncStudentIndex(session);
+    }
+  }
+}
+
 function queueWorkspaceSave() {
   const session = cloudSession;
   if (!session || !data) return;
@@ -185,6 +225,7 @@ async function flushWorkspace(session = cloudSession) {
       session.timer = setTimeout(() => flushWorkspace(session), 0);
     }
     cloudStatus(session.pending ? '還有修改等待同步。' : '已儲存到雲端');
+    syncStudentIndex(session);
     return !session.pending;
   } catch (error) {
     if (session !== cloudSession) return false;
@@ -207,6 +248,7 @@ function replaceWorkspace(session, next) {
   closeModal();
   renderView(state.view);
   cloudStatus(session.pending ? '有本機修改尚未同步。' : '已載入雲端資料', !!session.pending);
+  syncStudentIndex(session);
 }
 
 async function refreshWorkspace(session, revision) {
@@ -346,6 +388,7 @@ async function observeCloudAccount(user) {
         session.stopWatch = store.watch(revision => refreshWorkspace(session, revision),
           error => { if (session === cloudSession) cloudStatus(cloudErrorText(error), true); });
         cloudStatus(base.revision ? '已載入雲端資料' : '這個帳號還沒有雲端資料');
+        syncStudentIndex(session);
       } catch (error) {
         if (generation === accountGeneration) showCloudGate(cloudErrorText(error), user, true);
       } finally {
@@ -637,6 +680,9 @@ function bindCloudWorkspace() {
     } catch { toast('無法讀取舊版備份。請從原本的 TutorFlow 匯出。'); }
   };
   $('#pendingDraft').onclick = exportCloudDrafts;
+  $('#syncStudentIndex').onclick = () => {
+    if (cloudSession) syncStudentIndex(cloudSession, true);
+  };
   $('#loadTeacherAdmin').onclick = showTeacherAdmin;
   $('#sendAccountVerification').onclick = () => sendAccountVerification(cloudGateIdentity);
   $('#retryCloudAccount').onclick = async () => {

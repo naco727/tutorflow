@@ -37,6 +37,8 @@ function fixture(actorUid = 'admin', actorRole = 'admin', actorStatus = 'active'
   users.set('unrelated', authUser('unrelated'));
   add('teachers/teacher/workspace/head', {});
   add('teachers/teacher/workspace/head/chunks/0', {payload: {stringValue: 'fixture-data'}});
+  add('teachers/teacher/studentBindingIndex/s1', {name: {stringValue: '測試'}, active: {booleanValue: true}});
+  add('teachers/other-admin/studentBindingIndex/s1', {name: {stringValue: '另一位'}, active: {booleanValue: true}});
   add('teachers/teacher/public/publicAvailability', {});
   add('teachers/other-admin/workspace/head', {});
 
@@ -152,12 +154,15 @@ test('delete one UID, resume after a partial failure and preserve other accounts
   assert.equal(ctx.field('memberships/teacher','status'),'deleting');
   assert.equal(ctx.users.has('teacher'), false);
   assert.equal(ctx.documents.has('teachers/teacher/workspace/head/chunks/0'),true);
+  assert.equal(ctx.documents.has('teachers/teacher/studentBindingIndex/s1'),true);
   assert.equal((await ctx.makeRequest('delete')).status,200);
   assert.equal((await ctx.makeRequest('delete')).status,200);
   assert.equal(ctx.documents.has('memberships/teacher'),false);
   assert.equal(ctx.documents.has('retiredTeacherAccounts/teacher'),true);
   assert.equal(ctx.documents.has('teachers/teacher/workspace/head'),false);
   assert.equal(ctx.documents.has('teachers/teacher/workspace/head/chunks/0'),false);
+  assert.equal(ctx.documents.has('teachers/teacher/studentBindingIndex/s1'),false);
+  assert.equal(ctx.documents.has('teachers/other-admin/studentBindingIndex/s1'),true);
   assert.equal(ctx.documents.has('teachers/teacher/public/publicAvailability'),false);
   assert.equal(ctx.documents.has('teachers/other-admin/workspace/head'),true);
   assert.equal(ctx.users.has('other-admin'),true);

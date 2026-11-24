@@ -66,6 +66,39 @@
 5. 在 Cloudflare Worker 的「Settings → Variables and Secrets」加入文字環境變數 `TEACHER_UID`，值為 `Gt8LnIg2RHNLIdVIYGiI5YomyWK2`。Worker 會直接以 REST GET 讀取 `teachers/{TEACHER_UID}/public/publicAvailability`，並解析 `slots`。專案與資料庫預設為 `turtorflow` 與 `(default)`。公開讀取無需 Firebase 私密金鑰。切換後保持原 Webhook URL，從 LINE 聊天室點「詢問時段」，核對顯示及預約連結。舊公開網頁也已設定讀取相同老師的文件。參見 [Cloudflare Workers 環境變數](https://developers.cloudflare.com/workers/configuration/environment-variables/)。
 6. 若需要回復，使用保存的原 Worker 版本和舊集合。原文件在切換期間保留，注意並人工核對切換後新文件上的變更，避免復原到過期空堂。任何正式資料回寫或重啟舊寫入須先獲批准。
 
+## 私人學生查詢索引
+
+每位老師的索引存於 `teachers/{uid}/studentBindingIndex/{studentId}`。文件 ID 沿用 `students[].id`，內容只有 `name` 和 `active`。學生改名會更新文件，封存會設為 `active: false`，從學生名單移除會刪除索引文件。已保留的歷史課程依原本邏輯繼續顯示。
+
+登入新版會從已確認的工作區建立索引。之後新增、編輯、刪除、匯入或載入新版工作區時會同步差異。「更多 → 資料 → 學生查詢索引」可查看結果或手動同步。索引分批提交，每批先核對工作區版本。若索引暫時失敗，既有工作區仍可使用，下一次同步會重新比對並修復差異。請在狀態顯示已同步後再使用查詢。
+
+Firestore Rules 只允許已核准且以驗證信箱登入的工作區擁有者存取索引。已核准的管理員也只能存取自己的索引。公開空堂的權限維持原設定。
+
+### 部署與查詢
+
+1. 在 Firebase Console 的 Firestore「規則」發布 [firestore.rules](./firestore.rules)。使用 Firebase CLI 時可執行 `npx firebase deploy --project turtorflow --only firestore:rules`。
+2. 若已部署獨立帳號管理服務，先更新 [worker/account-admin.mjs](./worker/account-admin.mjs)。新版的既有刪除帳號流程會一併清理該帳號的索引。
+3. 更新 GitHub Pages。每位老師用自己的帳號登入，前往「更多 → 資料」核對索引筆數。Firestore Console 可再核對該 UID 的 `studentBindingIndex`，例如姓名、狀態和文件 ID。
+4. 更新現有 LINE OA Worker 的 [worker/tutorflow-worker.mjs](./worker/tutorflow-worker.mjs)，在「Settings → Variables and Secrets」確認 `TEACHER_UID` 是這個 OA 對應的老師，新增相同 Firebase 專案的 Web API Key 為 `FIREBASE_WEB_API_KEY`。Worker 會呼叫 Identity Toolkit 驗證老師的 Firebase ID Token，再以同一憑證查詢 Firestore。若網站來源不同，可設定 `TUTORFLOW_ADMIN_ORIGIN`。
+5. 用該老師在 TutorFlow 登入後的 Firebase ID Token 測試 `POST /admin/student-lookup`，送出 `Content-Type: application/json`、`Authorization: Bearer <Firebase ID Token>` 及 `{"name":"學生姓名"}`。只精確比對有效學生。成功時回傳 `matched` 和學生 ID、姓名，無結果回傳 `not-found`，同名回傳 `ambiguous`。用其他老師的登入憑證應收到拒絕。此路由供老師端呼叫，LINE 家長端的綁定流程在下一階段開發。
+
+### 現有計費流程與月結方案
+
+現有函式均位於 [index.html](./index.html)。
+
+| 步驟 | 既有實作 |
+| --- | --- |
+| 取課程 | `monthCourses(month)` 用課程的 `date` 選出指定年月份，再以 `c.studentId === studentId` 篩到指定學生。以完整 `YYYY-MM` 傳入，明細可按 `date`、`start` 排序。 |
+| 計算時數 | `courseHours(c)` 將同日的結束時間減開始時間，轉換成小時並以零為下限。 |
+| 計算金額 | `courseAmount(c)` 乘上 `Number(c.rateSnapshot) \|\| 0`。新增課程時由學生鐘點費寫入快照，編輯既有課程保留當堂費率。 |
+| 判斷應收 | `isBillable(c)` 只納入 `completed`。`scheduled` 和 `cancelled` 仍可列在課程明細。預約時間已過只影響顯示，仍須標記完成才可計費。 |
+| 彙總 | `renderDashboard()`、`renderFinance()`、`renderReports()` 從應收課程加總金額。收入及月報表加總相同集合的時數。已收是其中 `paid` 為真的金額，待收是應收減已收。畫面顯示才四捨五入，總額以原始數值計算。 |
+| 重複課程 | `materializeRecurrences()` 將規則展開成各堂課，以 `seriesId` 加日期檢查已生成的課程，也會略過 `skipDates`。月結直接用已儲存的每堂課和課程 ID，包含已完成的首堂，毋須再次展開規則。 |
+
+月結的最小方案是讓老師在已登入的 TutorFlow 中選學生和月份，使用現有工作區讀取與上述計費函式產生預覽，只把該學生該月必要的日期、起訖時間、時數、金額、付款狀態及合計交給 Worker。Worker 可用同一套登入驗證限制老師身分，再接受預覽、編輯與手動發送的操作。工作區分塊包含多位學生及其他紀錄，無法直接用 Firestore 依學生或月份查詢，應避免將整份資料傳給 LINE Worker。若日後要求管理頁獨立運作，可抽出目前計費函式供受保護的讀取服務共用，由該服務讀取並核對單一工作區版本，只回傳指定學生月份的必要欄位。
+
+姓名可以作初步比對。正式綁定時，再由老師核發一次性邀請碼或確認家長要求，並把 LINE user ID 與老師 UID、學生 ID 一起保存。遇到同名時由老師確認對象。查詢家長時不應回傳姓名是否存在或提供學生清單。Flex Message 應在老師確認收件人和預覽後人工發送。
+
 ## 啟用老師帳號管理服務
 
 「資料管理 → 老師管理」可直接讀取 `memberships/{uid}.email`。老師驗證信箱並登入後，TutorFlow 從 Firebase ID Token 取得信箱並寫入自己的會員紀錄。新申請會帶入信箱，既有會員會在下次登入時補寫。Firestore 規則會核對已驗證的登入信箱，只有管理員可讀取完整名單。先發布本版 Firestore 規則，再部署網站。

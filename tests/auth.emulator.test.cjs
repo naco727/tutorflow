@@ -7,6 +7,7 @@ const {initializeTestEnvironment} = require('@firebase/rules-unit-testing');
 const {doc, setDoc} = require('firebase/firestore');
 const {empty, workspaceStore} = require('../tutorflow-cloud.js');
 const availability = require('../tutorflow-availability.js');
+const studentIndex = require('../tutorflow-student-index.js');
 
 const projectId = 'demo-tutorflow';
 const origin = 'http://127.0.0.1:9099';
@@ -62,9 +63,81 @@ test('password registration, verification, reset, approval and two clients shari
     await fixture.withSecurityRulesDisabled(context => setDoc(doc(context.firestore(), 'memberships', uid), {role: 'teacher', status: 'active'}));
 
     const first = workspaceStore(db, uid), second = workspaceStore(device.firestore(), uid);
-    const draft = {...empty(), students: [{id: 'demo', name: '模擬器學生'}]};
-    await first.write({text: JSON.stringify(draft), base: await first.load(), mutationId: 'demo-import', migrate: true});
+    const draft = {
+      ...empty(),
+      students: [
+        {id: 'demo', name: '甲乙', rate: 800},
+        ...Array.from({length: 100}, (_, index) => ({id: 's-' + index, name: [2, 3].includes(index) ? '同名' : '學生 ' + index}))
+      ],
+      courses: [{id: 'c1', studentId: 'demo', date: '2099-01-01', start: '10:00', end: '11:00', status: 'completed'}]
+    };
+    const base = await first.write({text: JSON.stringify(draft), base: await first.load(), mutationId: 'demo-import', migrate: true});
     assert.deepEqual(JSON.parse((await second.load()).text), draft);
+    const students = db.collection('teachers').doc(uid).collection('studentBindingIndex');
+    const originalEntries = studentIndex.entries(draft.students);
+    let batches = 0;
+    const interruptedIndexDb = {
+      collection: db.collection.bind(db),
+      runTransaction: callback => {
+        batches += 1;
+        if (batches === 1) return db.runTransaction(callback);
+        throw Object.assign(new Error('offline'), {code: 'unavailable'});
+      }
+    };
+    await assert.rejects(studentIndex.reconcile(interruptedIndexDb, uid, base.revision, originalEntries), {code: 'unavailable'});
+    assert.equal((await students.get({source: 'server'})).size, 100);
+    assert.equal((await first.load()).text, base.text);
+    assert.equal(await studentIndex.reconcile(db, uid, base.revision, originalEntries), 101);
+    const indexSnapshot = await students.get({source: 'server'});
+    assert.equal(indexSnapshot.size, 101);
+    assert.deepEqual(indexSnapshot.docs.find(entry => entry.id === 'demo').data(), {name: '甲乙', active: true});
+    assert.deepEqual(await first.load(), base);
+
+    const {default: lineWorker, handleStudentLookup} = await import('../worker/tutorflow-worker.mjs');
+    const emulatorToken = await auth.currentUser.getIdToken();
+    const presentedToken = emulatorToken.endsWith('.') ? emulatorToken + 'fixture' : emulatorToken;
+    const env = {TEACHER_UID: uid, FIREBASE_PROJECT_ID: projectId, FIREBASE_WEB_API_KEY: projectId};
+    const fetcher = (input, options) => {
+      const url = new URL(input);
+      if (url.hostname === 'identitytoolkit.googleapis.com') {
+        return fetch(origin + '/identitytoolkit.googleapis.com' + url.pathname + url.search, {
+          ...options, body: JSON.stringify({idToken: emulatorToken})
+        });
+      }
+      assert.equal(url.hostname, 'firestore.googleapis.com');
+      return fetch('http://127.0.0.1:8080' + url.pathname + url.search, {
+        ...options, headers: {...options.headers, Authorization: 'Bearer ' + emulatorToken}
+      });
+    };
+    const lookup = (name, options = env, token = presentedToken) => handleStudentLookup(
+      new Request('https://example.invalid/admin/student-lookup', {
+        method: 'POST', headers: {Authorization: 'Bearer ' + token, 'Content-Type': 'application/json'},
+        body: JSON.stringify({name})
+      }), options, fetcher
+    );
+    assert.equal((await lineWorker.fetch(new Request('https://example.invalid/admin/student-lookup', {
+      method: 'POST'
+    }), env)).status, 401);
+    assert.equal((await lookup('甲乙', env, '')).status, 401);
+    assert.equal((await lookup('甲乙', {...env, TEACHER_UID: 'another-teacher'})).status, 403);
+    assert.deepEqual(await (await lookup('甲乙')).json(), {status: 'matched', student: {id: 'demo', name: '甲乙'}});
+    assert.deepEqual(await (await lookup('同名')).json(), {status: 'ambiguous'});
+
+    const edited = {...draft, students: [
+      {...draft.students[0], name: '甲丙'},
+      {...draft.students[1], archived: true}, ...draft.students.slice(3), {id: 'new', name: '丁戊'}
+    ]};
+    const latest = await first.write({text: JSON.stringify(edited), base, mutationId: 'rename-and-archive'});
+    assert.equal(await studentIndex.reconcile(db, uid, latest.revision, studentIndex.entries(edited.students)), 101);
+    await assert.rejects(studentIndex.reconcile(db, uid, base.revision, originalEntries), {code: 'index-revision-changed'});
+    assert.deepEqual((await students.doc('demo').get()).data(), {name: '甲丙', active: true});
+    assert.deepEqual((await students.doc('s-0').get()).data(), {name: '學生 0', active: false});
+    assert.equal((await students.doc('s-1').get()).exists, false);
+    assert.deepEqual((await students.doc('new').get()).data(), {name: '丁戊', active: true});
+    assert.deepEqual(await (await lookup('甲乙')).json(), {status: 'not-found'});
+    assert.deepEqual(await (await lookup('甲丙')).json(), {status: 'matched', student: {id: 'demo', name: '甲丙'}});
+    assert.deepEqual(await (await lookup('學生 0')).json(), {status: 'not-found'});
+    assert.deepEqual(await first.load(), latest);
     const slot = {date: '2099-01-01', start: '09:00', end: '10:00', status: 'available'};
     await availability.sync(db, uid, [slot]);
     const publicPath = availability.documentPath(uid);
@@ -123,10 +196,12 @@ test('account Worker uses real emulated Auth and Firestore REST operations', asy
       await setDoc(doc(context.firestore(), 'memberships', teacher.uid), {role: 'teacher', status: 'active'});
     });
     const teacherDb = teacherApp.firestore(), store = workspaceStore(teacherDb, teacher.uid);
-    await store.write({
-      text: JSON.stringify({...empty(), students:[{id:'fixture-student', name:'模擬學生'}]}),
+    const students = [{id:'fixture-student', name:'模擬學生'}];
+    const created = await store.write({
+      text: JSON.stringify({...empty(), students}),
       base: await store.load(), mutationId: 'teacher-deletion-fixture'
     });
+    await studentIndex.reconcile(teacherDb, teacher.uid, created.revision, studentIndex.entries(students));
     await availability.sync(teacherDb, teacher.uid, [{date:'2099-01-01',start:'09:00',end:'10:00',status:'available'}]);
     // Auth Emulator provides unsigned claims. Sign them with the test key used by the Worker fixture.
     const [, payload] = (await actor.getIdToken()).split('.');
@@ -155,6 +230,7 @@ test('account Worker uses real emulated Auth and Firestore REST operations', asy
         assert.equal((await getDoc(doc(db, path))).exists(), false);
       }
       assert.equal((await getDocs(collection(db, 'teachers/' + teacher.uid + '/workspace/head/chunks'))).empty, true);
+      assert.equal((await getDocs(collection(db, 'teachers/' + teacher.uid + '/studentBindingIndex'))).empty, true);
       assert.equal((await getDoc(doc(db, 'memberships/' + actor.uid))).exists(), true);
     });
   } finally {

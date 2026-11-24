@@ -107,5 +107,15 @@ service cloud.firestore {
         && request.resource.data.slots is list
         && request.resource.data.slots.size() <= 8640;
     }
+
+    match /teachers/{uid}/studentBindingIndex/{studentId} {
+      allow get, list, delete: if owns(uid);
+      allow create, update: if owns(uid)
+        && studentId.matches('[a-zA-Z0-9_.-]{1,160}')
+        && request.resource.data.keys().hasAll(['name', 'active'])
+        && request.resource.data.keys().hasOnly(['name', 'active'])
+        && request.resource.data.name is string
+        && request.resource.data.active is bool;
+    }
   }
 }

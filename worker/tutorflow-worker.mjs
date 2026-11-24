@@ -22,6 +22,8 @@
  * LINE_OA_ID
  * FIREBASE_PROJECT_ID（選填，預設 turtorflow）
  * FIRESTORE_DATABASE_ID（選填，預設 (default)）
+ * FIREBASE_WEB_API_KEY（啟用老師學生查詢時必填）
+ * TUTORFLOW_ADMIN_ORIGIN（選填，預設 https://naco727.github.io）
  * ICON_BASE_URL（選填）
  */
 
@@ -63,6 +65,10 @@ const PRICES = {
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+
+    if (url.pathname === "/admin/student-lookup") {
+      return handleStudentLookup(request, env);
+    }
 
     // 圖文選單管理頁
     if (url.pathname === "/admin/richmenu") {
@@ -1124,6 +1130,86 @@ function taipeiNow() {
 // =====================================
 
 const defaultProject = PROJECT_ID;
+
+export async function handleStudentLookup(request, env, fetcher = fetch) {
+  const origin = request.headers.get("Origin");
+  const allowedOrigin = env.TUTORFLOW_ADMIN_ORIGIN || "https://naco727.github.io";
+  const headers = {"Cache-Control": "no-store", "Vary": "Origin"};
+  const reply = (body, status = 200) => Response.json(body, {status, headers});
+  if (origin) {
+    if (origin !== allowedOrigin && origin !== new URL(request.url).origin) {
+      return reply({code: "forbidden"}, 403);
+    }
+    headers["Access-Control-Allow-Origin"] = origin;
+  }
+  if (request.method === "OPTIONS") {
+    return new Response(null, {status: 204, headers: {
+      ...headers,
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Authorization, Content-Type"
+    }});
+  }
+  if (request.method !== "POST") return reply({code: "method-not-allowed"}, 405);
+  const idToken = request.headers.get("Authorization")?.match(/^Bearer ([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/i)?.[1];
+  if (!idToken || idToken.length > 8192) return reply({code: "unauthenticated"}, 401);
+  const teacherUid = env.TEACHER_UID;
+  const apiKey = env.FIREBASE_WEB_API_KEY;
+  if (!apiKey || typeof teacherUid !== "string" || !/^[^/\s]{1,128}$/.test(teacherUid) ||
+      /^(__.*__|\.{1,2})$/.test(teacherUid)) return reply({code: "not-configured"}, 503);
+
+  try {
+    const post = (url, body, authorization = {}) => fetcher(url, {
+      method: "POST",
+      headers: {"Content-Type": "application/json", ...authorization},
+      body: JSON.stringify(body),
+      redirect: "error",
+      signal: AbortSignal.timeout(10000)
+    });
+    const authUrl = new URL("https://identitytoolkit.googleapis.com/v1/accounts:lookup");
+    authUrl.searchParams.set("key", apiKey);
+    const auth = await post(authUrl.href, {idToken});
+    if (!auth.ok) return auth.status === 400 || auth.status === 401
+      ? reply({code: "unauthenticated"}, 401) : reply({code: "lookup-unavailable"}, 503);
+
+    const {users} = await auth.json();
+    const teacher = users?.[0];
+    if (users?.length !== 1 || teacher?.localId !== teacherUid || teacher.emailVerified !== true || teacher.disabled) {
+      return reply({code: "forbidden"}, 403);
+    }
+    const body = await request.json().catch(() => null);
+    const name = body?.name;
+    if (typeof name !== "string" || !name.trim() || new TextEncoder().encode(name).length > 1500) {
+      return reply({code: "invalid-name"}, 400);
+    }
+
+    const project = env.FIREBASE_PROJECT_ID || defaultProject;
+    const database = env.FIRESTORE_DATABASE_ID || "(default)";
+    const parent = "projects/" + encodeURIComponent(project) + "/databases/" + encodeURIComponent(database) +
+      "/documents/teachers/" + encodeURIComponent(teacherUid);
+    const response = await post("https://firestore.googleapis.com/v1/" + parent + ":runQuery", {
+      structuredQuery: {
+        from: [{collectionId: "studentBindingIndex"}],
+        select: {fields: [{fieldPath: "name"}]},
+        where: {compositeFilter: {op: "AND", filters: [
+          {fieldFilter: {field: {fieldPath: "name"}, op: "EQUAL", value: {stringValue: name}}},
+          {fieldFilter: {field: {fieldPath: "active"}, op: "EQUAL", value: {booleanValue: true}}}
+        ]}},
+        limit: 2
+      }
+    }, {Authorization: "Bearer " + idToken});
+    if (response.status === 401) return reply({code: "unauthenticated"}, 401);
+    if (response.status === 403) return reply({code: "forbidden"}, 403);
+    if (!response.ok) return reply({code: "lookup-unavailable"}, 503);
+    const rows = (await response.json()).flatMap(row => row.document ? [row.document] : []);
+    if (rows.length !== 1) return reply({status: rows.length ? "ambiguous" : "not-found"});
+    const document = rows[0];
+    const studentId = document.name?.split("/").at(-1);
+    if (!studentId || document.fields?.name?.stringValue !== name) return reply({code: "lookup-unavailable"}, 503);
+    return reply({status: "matched", student: {id: studentId, name}});
+  } catch {
+    return reply({code: "lookup-unavailable"}, 503);
+  }
+}
 
 async function readTeacherAvailabilityDocument(env, fetchDocument = fetch) {
   const teacherUid = env?.TEACHER_UID;
