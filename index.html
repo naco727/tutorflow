@@ -193,12 +193,12 @@
           <input class="input" type="month" id="financeMonth" aria-label="收入月份" />
           <button class="btn btn-secondary btn-sm" type="button" data-view="reports">月度報表</button>
         </div>
+        <div class="grid report-grid" id="financeStats" style="margin-bottom:16px"></div>
         <div class="finance-tabs" id="financeTabs" role="tablist" aria-label="收費方式" hidden>
           <button class="finance-tab" id="finance-tab-perLesson" type="button" role="tab" aria-controls="financePanel" aria-selected="true" data-finance-tab="perLesson">單堂收費</button>
           <button class="finance-tab" id="finance-tab-monthly" type="button" role="tab" aria-controls="financePanel" aria-selected="false" tabindex="-1" data-finance-tab="monthly">月結</button>
         </div>
         <div id="financePanel">
-          <div class="grid report-grid" id="financeStats" style="margin-bottom:16px"></div>
           <div class="card">
             <div class="section-head"><div><h2>收入明細</h2><p>依課程日期與費率快照計算</p></div></div>
             <section class="settlement-overview" id="settlementOverview" aria-labelledby="settlementHeading" hidden>
@@ -740,6 +740,11 @@ function financeDateHtml(c){const d=parseDate(c.date);return `<div class="financ
     function renderFinance(){
       const month=$('#financeMonth').value||currentMonth();
       $('#financeMonth').value=month;
+      const monthLessons=monthCourses(month);
+      const bill=monthLessons.filter(isBillable);
+      const due=bill.reduce((sum,course)=>sum+courseAmount(course),0);
+      const paid=bill.filter(course=>course.paid).reduce((sum,course)=>sum+courseAmount(course),0);
+      const hours=bill.reduce((sum,course)=>sum+courseHours(course),0);
       const hasMonthlyStudents=activeStudents().some(s=>settlementTiming(s.settlementTiming)!=='perLesson');
       if(!hasMonthlyStudents&&state.financeTab==='monthly'){
         state.financeTab='perLesson';
@@ -762,7 +767,7 @@ function financeDateHtml(c){const d=parseDate(c.date);return `<div class="financ
       const showSettlement=hasMonthlyStudents&&state.financeTab==='monthly';
       $('#settlementOverview').hidden=!showSettlement;
       const studentTabs=new Map();
-      const allCourses=monthCourses(month).filter(course=>{
+      const allCourses=monthLessons.filter(course=>{
         if(!hasMonthlyStudents)return true;
         if(!studentTabs.has(course.studentId)){
           const timing=settlementTiming(student(course.studentId).settlementTiming);
@@ -771,9 +776,7 @@ function financeDateHtml(c){const d=parseDate(c.date);return `<div class="financ
         return studentTabs.get(course.studentId)===state.financeTab;
       });
       const pastCourses=allCourses.filter(c=>c.status==='scheduled'&&isCoursePast(c));
-      const bill=allCourses.filter(isBillable);
-      const unpaidCourses=bill.filter(c=>!c.paid);
-      const due=bill.reduce((a,c)=>a+courseAmount(c),0),paid=bill.filter(c=>c.paid).reduce((a,c)=>a+courseAmount(c),0),hours=bill.reduce((a,c)=>a+courseHours(c),0);
+      const unpaidCourses=allCourses.filter(c=>isBillable(c)&&!c.paid);
       const filter=state.financeFilter;
       const visibleCourses=filter==='unpaid'?unpaidCourses:filter==='expired'?pastCourses:allCourses;
       if(state.financeStudentId&&(!showSettlement||!allCourses.some(c=>c.studentId===state.financeStudentId)))state.financeStudentId='';
@@ -782,7 +785,7 @@ function financeDateHtml(c){const d=parseDate(c.date);return `<div class="financ
       const cs=selectedStudent?visibleCourses.filter(c=>c.studentId===selectedStudent):visibleCourses;
       $('#financeStudentFilter').hidden=!selectedStudent;
       $('#financeStudentFilterName').textContent=selectedStudent?`${student(selectedStudent).name}・課程明細`:'';
-      const countStudents=items=>new Set(items.map(c=>c.studentId)).size;$('#financeRuleNotice').innerHTML=`<div>目前時間：${new Intl.DateTimeFormat('zh-TW',{dateStyle:'medium',timeStyle:'short'}).format(new Date())}。過去且仍為「預約中」的課程會標示為「時間已過」，只能更新為「已完成」或「取消」。</div><div class="finance-alert-actions"><button type="button" class="finance-alert ${filter==='unpaid'?'active':''}" data-finance-filter="unpaid" ${unpaidCourses.length?'':'disabled'}>未收款 <strong>${countStudents(unpaidCourses)} 位</strong></button><button type="button" class="finance-alert expired ${filter==='expired'?'active':''}" data-finance-filter="expired" ${pastCourses.length?'':'disabled'}>時間已過 <strong>${countStudents(pastCourses)} 位</strong></button><button type="button" class="finance-alert all ${filter==='all'?'active':''}" data-finance-filter="all">顯示全部</button></div>`;$('#financeStats').innerHTML=`<div class="card finance-total-card"><div class="stat-label">應收收入</div><div class="report-big">${fmtMoney(due)}</div><div class="stat-sub">本月已完成且符合收費條件的課程</div></div><div class="card"><div class="stat-label">授課時數</div><div class="report-big">${hours.toFixed(1)} <small style="font-size:13px">小時</small></div></div><div class="card"><div class="stat-label">待收款</div><div class="report-big" style="color:var(--apricot-dark)">${fmtMoney(due-paid)}</div></div>`;$('#financeTable').innerHTML=cs.length?cs.sort((a,b)=>(a.date+a.start).localeCompare(b.date+b.start)).map(c=>`<tr><td>${financeDateHtml(c)}</td><td><strong>${esc(student(c.studentId).name)}</strong></td><td>${courseHours(c).toFixed(1)} 小時</td><td>${Math.round(Number(c.rateSnapshot)||0).toLocaleString('zh-TW')} / 小時</td><td>${isBillable(c)?Math.round(courseAmount(c)).toLocaleString('zh-TW'):'—'}</td><td>${quickStatus(c,true)}</td></tr>`).join(''):`<tr><td colspan="6"><div class="empty">${filter==='all'?'本月沒有課程資料':'目前沒有符合此通知的課程'}</div></td></tr>`}
+      const countStudents=items=>new Set(items.map(c=>c.studentId)).size;$('#financeRuleNotice').innerHTML=`<div>目前時間：${new Intl.DateTimeFormat('zh-TW',{dateStyle:'medium',timeStyle:'short'}).format(new Date())}。過去且仍為「預約中」的課程會標示為「時間已過」，只能更新為「已完成」或「取消」。</div><div class="finance-alert-actions"><button type="button" class="finance-alert ${filter==='unpaid'?'active':''}" data-finance-filter="unpaid" ${unpaidCourses.length?'':'disabled'}>未收款 <strong>${countStudents(unpaidCourses)} 位</strong></button><button type="button" class="finance-alert expired ${filter==='expired'?'active':''}" data-finance-filter="expired" ${pastCourses.length?'':'disabled'}>時間已過 <strong>${countStudents(pastCourses)} 位</strong></button><button type="button" class="finance-alert all ${filter==='all'?'active':''}" data-finance-filter="all">顯示全部</button></div>`;$('#financeStats').innerHTML=`<div class="card finance-total-card"><div class="stat-label">本月收入</div><div class="report-big">${fmtMoney(due)}</div><div class="stat-sub">單堂與月結合計 · 已完成課程應收</div></div><div class="card"><div class="stat-label">授課時數</div><div class="report-big">${hours.toFixed(1)} <small style="font-size:13px">小時</small></div></div><div class="card"><div class="stat-label">待收款</div><div class="report-big" style="color:var(--apricot-dark)">${fmtMoney(due-paid)}</div></div>`;$('#financeTable').innerHTML=cs.length?cs.sort((a,b)=>(a.date+a.start).localeCompare(b.date+b.start)).map(c=>`<tr><td>${financeDateHtml(c)}</td><td><strong>${esc(student(c.studentId).name)}</strong></td><td>${courseHours(c).toFixed(1)} 小時</td><td>${Math.round(Number(c.rateSnapshot)||0).toLocaleString('zh-TW')} / 小時</td><td>${isBillable(c)?Math.round(courseAmount(c)).toLocaleString('zh-TW'):'—'}</td><td>${quickStatus(c,true)}</td></tr>`).join(''):`<tr><td colspan="6"><div class="empty">${filter==='all'?'本月沒有課程資料':'目前沒有符合此通知的課程'}</div></td></tr>`}
     function renderReports(){const month=$('#reportMonth').value||currentMonth();$('#reportMonth').value=month;const cs=monthCourses(month), bill=cs.filter(isBillable), due=bill.reduce((a,c)=>a+courseAmount(c),0),paid=bill.filter(c=>c.paid).reduce((a,c)=>a+courseAmount(c),0);$('#reportStats').innerHTML=`<div class="card"><div class="stat-label">授課時數</div><div class="report-big">${bill.reduce((a,c)=>a+courseHours(c),0).toFixed(1)}<small style="font-size:13px"> 小時</small></div></div><div class="card"><div class="stat-label">完成課程</div><div class="report-big">${bill.length}<small style="font-size:13px"> 堂</small></div></div><div class="card"><div class="stat-label">應收收入</div><div class="report-big">${fmtMoney(due)}</div></div><div class="card"><div class="stat-label">已收款</div><div class="report-big" style="color:var(--sage-dark)">${fmtMoney(paid)}</div></div><div class="card"><div class="stat-label">待收款</div><div class="report-big" style="color:var(--apricot-dark)">${fmtMoney(due-paid)}</div></div><div class="card"><div class="stat-label">本月課程總數</div><div class="report-big">${cs.length}<small style="font-size:13px"> 堂</small></div></div>`;const totals=data.students.map(s=>{const x=bill.filter(c=>c.studentId===s.id);return {...s,hours:x.reduce((a,c)=>a+courseHours(c),0),amount:x.reduce((a,c)=>a+courseAmount(c),0)}}).filter(x=>x.hours||cs.some(c=>c.studentId===x.id));const max=Math.max(1,...totals.map(x=>x.amount));$('#studentReport').innerHTML=totals.length?totals.map(s=>`<div class="bar-row"><span>${esc(s.name)}</span><div class="bar-track"><div class="bar-fill" style="width:${s.amount/max*100}%"></div></div><strong>${Math.round(s.amount||0).toLocaleString('zh-TW')}</strong></div>`).join(''):`<div class="empty">本月還沒有已完成課程</div>`;const states=Object.keys(statusMap).map(k=>({k,count:cs.filter(c=>c.status===k).length})).filter(x=>x.count);const maxState=Math.max(1,...states.map(x=>x.count));$('#statusReport').innerHTML=states.length?states.map(x=>`<div class="bar-row"><span>${statusMap[x.k][0]}</span><div class="bar-track"><div class="bar-fill" style="width:${x.count/maxState*100}%;background:${x.k==='completed'?'var(--sage)':'var(--lav-dark)'}"></div></div><strong>${x.count} 堂</strong></div>`).join(''):`<div class="empty">本月還沒有課程</div>`}
 function renderSettings(){$('#dataSummary').textContent=`${data.students.length} 位學生・${data.courses.length} 堂課程・${data.notes.length} 筆教學紀錄`;renderAvailabilitySettings();renderCloudAccount()}
     function pickerText(kind,value){return kind==='date'?(value?fmtDate(value,'full'):'選擇日期'):(value||'選擇時間')}
