@@ -115,6 +115,8 @@ function lockCloudAccount() {
   $('.mobile-nav').inert = true;
   $('#modal').replaceChildren();
   $('#modalBackdrop').classList.remove('open');
+  const announcement = $('#releaseAnnouncement');
+  if (announcement?.open) announcement.close();
   $('#toast').textContent = '';
 }
 
@@ -426,6 +428,7 @@ async function observeCloudAccount(user) {
         session.stopWatch = store.watch(revision => refreshWorkspace(session, revision),
           error => { if (session === cloudSession) cloudStatus(cloudErrorText(error), true); });
         cloudStatus(base.revision ? '已載入雲端資料' : '這個帳號還沒有雲端資料');
+        showReleaseAnnouncement(user.uid);
       } catch (error) {
         if (generation === accountGeneration) showCloudGate(cloudErrorText(error), user, true);
       } finally {
