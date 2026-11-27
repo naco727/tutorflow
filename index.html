@@ -116,11 +116,9 @@
     .settlement-student:hover,.settlement-student[aria-pressed="true"]{background:#eaf1e9}
     .settlement-student small{display:block;color:var(--muted);font-size:12px;margin-top:2px}
     .settlement-amount{text-align:right;flex-shrink:0;font-variant-numeric:tabular-nums}
-    .settlement-payment{display:flex;flex-wrap:wrap;gap:4px 14px;padding:0 8px 7px;color:var(--muted);font-size:12px}
-    .settlement-payment span:last-child{color:var(--apricot-dark)}
-    .settlement-collection{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:8px;padding:2px 8px 8px}
-    .settlement-status{border-radius:99px;padding:4px 9px;background:var(--apricot);color:var(--apricot-dark);font-size:12px;font-weight:800}
-    .settlement-status.is-paid{background:#eaf1e9;color:var(--sage-dark)}
+    .settlement-status{display:block;margin:2px 8px 8px auto;min-height:44px;border:1px solid #ead3b9;border-radius:99px;padding:6px 12px;background:#fbefe2;color:var(--apricot-dark);font:inherit;font-size:12px;font-weight:800;cursor:pointer}
+    .settlement-status.is-paid{border-color:#d1dfd0;background:#eaf1e9;color:var(--sage-dark)}
+    .settlement-status:focus-visible{outline:2px solid var(--sage-dark);outline-offset:2px}
     .finance-student-filter{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;margin-bottom:10px;border-radius:12px;background:#eaf1e9;overflow-wrap:anywhere}
     .finance-student-filter[hidden]{display:none}
     .finance-student-filter button{flex-shrink:0}
@@ -614,15 +612,13 @@
         let row=byStudent.get(course.studentId);
         if(!row){
           const record=student(course.studentId), timing=settlementTiming(record.settlementTiming);
-          row={studentId:course.studentId,name:record.name,timing,courses:[],hours:0,total:0,paid:0};
+          row={studentId:course.studentId,name:record.name,timing,courses:[],hours:0,total:0};
           byStudent.set(course.studentId,row);
         }
         if(row.timing==='perLesson'||!canKeepCoursePayment(course.status,row.timing))continue;
-        const amount=courseAmount(course);
         row.courses.push(course);
         row.hours+=courseHours(course);
-        row.total+=amount;
-        if(course.paid)row.paid+=amount;
+        row.total+=courseAmount(course);
       }
       for(const row of byStudent.values()){
         if(row.courses.length)groups[row.timing].push(row);
@@ -640,16 +636,13 @@
           <h4>${settlementLabels[timing]}</h4><p>${descriptions[timing]}</p>
           <ul>${rows.map(row=>{
             const allPaid=row.courses.every(course=>course.paid);
+            const paymentStatus=allPaid?'整月已收款':'整月未收款';
             return `<li>
             <button type="button" class="settlement-student" data-finance-student="${esc(row.studentId)}" aria-pressed="${state.financeStudentId===row.studentId}">
               <span><strong>${esc(row.name)}</strong><small>${row.courses.length} 堂 · ${Number(row.hours.toFixed(2))} 小時</small></span>
               <span class="settlement-amount"><small>${timing==='monthStart'?'預計費用':'應收'}</small><strong>${fmtMoney(row.total)}</strong></span>
             </button>
-            <div class="settlement-payment"><span>已收 ${fmtMoney(row.paid)}</span><span>待收 ${fmtMoney(row.total-row.paid)}</span></div>
-            <div class="settlement-collection">
-              <span class="settlement-status${allPaid?' is-paid':''}">${allPaid?'整月已收款':'整月未收款'}</span>
-              <button type="button" class="btn ${allPaid?'btn-ghost':'btn-secondary'} btn-sm" data-finance-monthly-payment="${esc(row.studentId)}" aria-label="${esc(row.name)} ${allPaid?'改為整月未收款':'標記整月已收款'}">${allPaid?'改為未收款':'標記整月收款'}</button>
-            </div>
+            <button type="button" class="settlement-status${allPaid?' is-paid':''}" data-finance-monthly-payment="${esc(row.studentId)}" aria-label="${esc(row.name)}：${paymentStatus}，${allPaid?'改為未收款':'標記已收款'}">${paymentStatus}</button>
           </li>`;
           }).join('')}</ul>
         </section>`;
